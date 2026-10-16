@@ -1,21 +1,23 @@
 #include <Arduino.h>
 #include "RobotConfig.h"
 
-static int searchStep = 0;
-static unsigned long searchStepStartTime = 0;
-static bool searchInitialized = false;
-static bool classifyingObject = false;
-static bool confirmingTarget = false;
-static unsigned long targetConfirmStartTime = 0;
-static bool settlingTarget = false;
-static unsigned long targetSettleStartTime = 0;
-static unsigned long classificationStartTime = 0;
-static unsigned long lastClassificationSampleTime = 0;
-static int minimumObservedDistance = 0;
-static int maximumObservedDistance = 0;
-static bool confirmingApproachContact = false;
-static unsigned long approachContactStartTime = 0;
+static int searchStep = 0; // 探索パターンを進めるためのステップ番号
+static unsigned long searchStepStartTime = 0; // 探索パターンのステップ開始時刻を記録する変数
+static bool searchInitialized = false; // 探索パターンの初期化が完了したかどうかを示すフラグ
 
+static bool classifyingObject = false; // 動体か静止物体かを判定する段階
+static bool confirmingTarget = false;  // 候補が視界に残っていることを確認する段階
+static unsigned long targetConfirmStartTime = 0; // 候補が視界に残っていることを確認する段階の開始時刻を記録する変数
+static bool settlingTarget = false; // 停止後、距離が安定するまで待つ段階
+static unsigned long targetSettleStartTime = 0; // 停止後、距離が安定するまで待つ段階の開始時刻を記録する変数
+static unsigned long classificationStartTime = 0; // 動体か静止物体かを判定する段階の開始時刻を記録する変数
+static unsigned long lastClassificationSampleTime = 0; // 動体か静止物体かを判定する段階で、距離を確認した最後の時刻を記録する変数
+static int minimumObservedDistance = 0; // 動体か静止物体かを判定する段階で、観測された最小距離を記録する変数
+static int maximumObservedDistance = 0; // 動体か静止物体かを判定する段階で、観測された最大距離を記録する変数
+static bool approachConfirming = false; // 0～3cmを維持できているか確認中
+static unsigned long approachContactStartTime = 0; // 0～3cmの確認開始時刻
+
+// サーチパターンの初期化を行う関数
 void resetSearchPattern() {
   searchStep = 0;
   searchStepStartTime = millis();
@@ -23,7 +25,7 @@ void resetSearchPattern() {
   classifyingObject = false;
   confirmingTarget = false;
   settlingTarget = false;
-  confirmingApproachContact = false;
+  approachConfirming = false;
 }
 
 bool detectTarget() {
@@ -45,7 +47,7 @@ void search() {
   if (sensors.distanceCm >= 0 && sensors.distanceCm <= 1) {
     stopMotors();
     sensors.targetDetected = false;
-    confirmingApproachContact = false;
+    approachConfirming = false;
     resetCarryMotion();
     state = CARRY;
     return;
@@ -65,7 +67,8 @@ void search() {
     }
     return;
   }
-
+  // 候補が視界に残っていることを確認する。
+  // 旋回中に候補が視界から外れた場合は、再度確認をやり直す。
   if (classifyingObject) {
     stopMotors();
 
@@ -77,7 +80,7 @@ void search() {
       state = AVOID;
       return;
     }
-
+    // 動体か静止物体かを判定する段階で、距離の最大値と最小値を記録する。
     if (millis() - lastClassificationSampleTime >=
         OBJECT_SAMPLE_INTERVAL_MS) {
       lastClassificationSampleTime = millis();
@@ -86,7 +89,7 @@ void search() {
       if (sensors.distanceCm > maximumObservedDistance)
         maximumObservedDistance = sensors.distanceCm;
     }
-
+    // 動体か静止物体かを判定する段階で、一定時間経過したら距離変化を確認する。
     if (millis() - classificationStartTime >= OBJECT_MOTION_WINDOW_MS) {
       int distanceChange = maximumObservedDistance - minimumObservedDistance;
       classifyingObject = false;
@@ -104,13 +107,14 @@ void search() {
     }
     return;
   }
-
+  // 探索パターンの初期化を行う。
   if (!searchInitialized) {
     searchStep = 0;
     searchStepStartTime = millis();
     searchInitialized = true;
   }
-
+  // 候補が視界に残っていることを確認する段階。
+  // 一定時間経過したら停止して距離が安定するのを待つ。
   if (sensors.targetDetected) {
     if (!confirmingTarget) {
       confirmingTarget = true;
@@ -148,15 +152,39 @@ void search() {
 }
 
 void approachTarget() {
+  int currentDistanceCm = sensors.distanceCm;
+
+  // 0～3cmを検出したら、その判定を保持して1秒前進し、CARRYへ移る。
+  if (approachConfirming) {
+    if (millis() - approachContactStartTime < 1000) {
+      moveForward(FORWARD_SPEED);
+      return;
+    }
+
+    approachConfirming = false;
+    stopMotors();
+    sensors.targetDetected = false;
+    resetCarryMotion();
+    state = CARRY;
+    return;
+  }
+
+  if (currentDistanceCm >= 0 && currentDistanceCm <= 3) {
+    approachConfirming = true;
+    approachContactStartTime = millis();
+    moveForward(FORWARD_SPEED);
+    return;
+  }
+
   if (!sensors.targetDetected) {
-    confirmingApproachContact = false;
+    approachConfirming = false;
     state = SEARCH;
     return;
   }
 
-  // 対象が50cm以上離れたら接近を中断し、探索をやり直す。
-  if (sensors.targetDistanceCm >= TARGET_DETECTION_RANGE_CM) {
-    confirmingApproachContact = false;
+  // 対象が探索範囲より遠くなったら接近を中断し、探索をやり直す。
+  if (currentDistanceCm > TARGET_DETECTION_RANGE_CM) {
+    approachConfirming = false;
     sensors.targetDetected = false;
     stopMotors();
     resetSearchPattern();
@@ -164,43 +192,19 @@ void approachTarget() {
     return;
   }
 
-  // 接触距離に達したら停止して1秒待ち、待機終了時の距離で判定する。
-  if (confirmingApproachContact) {
+  if (currentDistanceCm < 0) {
+    approachConfirming = false;
+    sensors.targetDetected = false;
     stopMotors();
-
-    if (millis() - approachContactStartTime < 1000) {
-      return;
-    }
-
-    confirmingApproachContact = false;
-    if (sensors.targetDistanceCm == 0 || sensors.targetDistanceCm == 1) {
-      sensors.targetDetected = false;
-      resetCarryMotion();
-      state = CARRY;
-    } else if (sensors.targetDistanceCm > 1) {
-      // 1秒後に離れていたら、再び接近して確認し直す。
-      moveForward(FORWARD_SPEED);
-    }
-    return;
-  }
-
-  if (sensors.targetDistanceCm == 0 || sensors.targetDistanceCm == 1) {
-    confirmingApproachContact = true;
-    approachContactStartTime = millis();
-    stopMotors();
-    return;
-  }
-
-  // 距離が読めない間は前進せず、読み取れたら接近を続ける。
-  if (sensors.targetDistanceCm < 0) {
-    stopMotors();
+    resetSearchPattern();
+    state = SEARCH;
     return;
   }
 
   moveForward(FORWARD_SPEED);
 }
 
-
+// 障害物回避の段階制御を行う関数
 void avoidObstacle() {
   // delayしない段階制御にして、回避中もXBeeのSTOPを受信できるようにする。
   static int phase = 0;
