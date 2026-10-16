@@ -11,6 +11,7 @@ int motorL = 0;
 int motorR = 0;
 bool robotEnabled = false;
 bool buttonWasPressed = false;
+RobotState previousState = STOP;
 
 void checkButton() {
   bool buttonPressed = button.isPressed();
@@ -132,6 +133,12 @@ void loop() {
             checkGoal();
             break;
     }
+
+    // CARRYへ入った瞬間だけ短く鳴らす。CARRY中は繰り返し鳴らさない。
+    if (state == CARRY && previousState != CARRY) {
+        tone(buzzerPin, 440, 50); // CARRY移行時に440Hzを50ms鳴らす
+    }
+    previousState = state;
 
     motors.setSpeeds(motorL, motorR);
     sendStatus();
