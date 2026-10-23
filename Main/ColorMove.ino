@@ -1,3 +1,6 @@
+//赤(118,54,56)
+//青(39,69,101)
+//黒(29,40,39)
 // 状態名
 enum {
   INIT,
@@ -18,7 +21,7 @@ void move()
   static int turnSpeed = 100;
 
   // 90度回転する時間
-  static unsigned long turn90Time = 300;
+  static unsigned long turn90Time = 200;
 
   switch (mode_G)
   {
@@ -31,8 +34,8 @@ void move()
       motorL_G = forwardSpeed;
       motorR_G = forwardSpeed;
 
-      // 赤または青を踏んだら押し出し動作へ
-      if (identify_color(117, 20, 25) || identify_color(13, 36, 82))  //赤 || 青                   
+      // 赤または青を踏んだら押し出し
+      if (identify_color(118, 54, 56) || identify_color(39, 69, 101))  //赤 || 青                   
       {
         if (detected == false)
         {
@@ -42,7 +45,7 @@ void move()
         }
       }
       // 黒を踏んだら90度回転へ
-      else if (identify_color(0, 0, 1))
+      else if (identify_color(29, 40, 39))
       {
         if (detected == false)
         {
@@ -57,11 +60,11 @@ void move()
       }
       break;
 
-    case PUSH: // 1秒間押し出す
+    case PUSH: // 0.35秒間押し出す
       motorL_G = forwardSpeed;
       motorR_G = forwardSpeed;
 
-      if (millis() - start_time >= 1000)
+      if (millis() - start_time >= 350)
       {
         mode_G = BACKWARD;
         start_time = millis();
@@ -79,18 +82,18 @@ void move()
       }
       break;
 
-    case ROTATE: // 3.5秒間回転
+    case ROTATE: // 3秒間回転
       motorL_G = turnSpeed;
       motorR_G = -turnSpeed;
 
-      if (millis() - start_time >= 3500)
+      if (millis() - start_time >= 3000)
       {
         mode_G = FORWARD;
         detected = false;
       }
       break;
 
-    case ROTATE_90: // 黒を踏んだら90度?回転
+    case ROTATE_90: // 黒を踏んだら120度?回転
       motorL_G = turnSpeed;
       motorR_G = -turnSpeed;
 
