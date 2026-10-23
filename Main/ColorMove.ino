@@ -18,10 +18,10 @@ void move()
 
   static int forwardSpeed = 150;
   static int backwardSpeed = -150;
-  static int turnSpeed = 100;
+  static int turnSpeed = 200;
 
-  // 90度回転する時間
-  static unsigned long turn90Time = 200;
+  // 黒を検知した時に回転する時間
+  static unsigned long turn90Time = 750;
 
   switch (mode_G)
   {
@@ -82,7 +82,7 @@ void move()
       }
       break;
 
-    case ROTATE: // 3秒間回転
+    case ROTATE: // 1.5秒間回転
       motorL_G = turnSpeed;
       motorR_G = -turnSpeed;
 
@@ -93,7 +93,7 @@ void move()
       }
       break;
 
-    case ROTATE_90: // 黒を踏んだら120度?回転
+    case ROTATE_90: // 黒を検知したら回転
       motorL_G = turnSpeed;
       motorR_G = -turnSpeed;
 
