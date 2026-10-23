@@ -16,6 +16,7 @@ static int minimumObservedDistance = 0; // 動体か静止物体かを判定す�
 static int maximumObservedDistance = 0; // 動体か静止物体かを判定する段階で、観測された最大距離を記録する変数
 static bool approachConfirming = false; // 0～3cmを維持できているか確認中
 static unsigned long approachContactStartTime = 0; // 0～3cmの確認開始時刻
+static uint8_t approachLostSampleCount = 0; // 接近中の範囲外連続回数
 
 // サーチパターンの初期化を行う関数
 void resetSearchPattern() {
@@ -26,6 +27,7 @@ void resetSearchPattern() {
   confirmingTarget = false;
   settlingTarget = false;
   approachConfirming = false;
+  approachLostSampleCount = 0;
 }
 
 bool detectTarget() {
@@ -40,7 +42,7 @@ int targetDistance() {
 
 void search() {
   const unsigned long FORWARD_TIME = 500;
-  const unsigned long ROTATE_TIME = SWEEP_150_TIME_MS;
+  const unsigned long ROTATE_TIME = SWEEP_360_TIME_MS;
 
   // 探索へ戻った直後も0～1cmに対象がある場合は、カップを保持中とみなし
   // SEARCHへ進まず運搬状態を維持する。
@@ -77,7 +79,10 @@ void search() {
       classifyingObject = false;
       searchInitialized = false;
       sensors.targetDetected = false;
-      state = AVOID;
+      confirmingTarget = false;
+      settlingTarget = false;
+      // 測距不能・検出範囲外は動体の根拠にせず、探索をやり直す。
+      state = SEARCH;
       return;
     }
     // 動体か静止物体かを判定する段階で、距離の最大値と最小値を記録する。
@@ -131,23 +136,19 @@ void search() {
     confirmingTarget = false;
   }
 
-  // 前進後、左へ約150度振って正面へ戻し、右へ約150度振って戻す。
-  // 検出されなければこの探索パターンを繰り返す。
+  // 少し前進した後、その場で約360度回転する探索パターンを繰り返す。
   unsigned long duration = (searchStep == 0) ? FORWARD_TIME : ROTATE_TIME;
 
   if (millis() - searchStepStartTime >= duration) {
-    searchStep = (searchStep + 1) % 5;
+    searchStep = (searchStep + 1) % 2;
     searchStepStartTime = millis();
   }
 
   if (searchStep == 0) {
     moveForward(FORWARD_SPEED);
-  } else if (searchStep == 1 || searchStep == 4) {
-    // 左旋回: 左へ振る、または右側から正面へ戻る
-    rotateInPlace(ROTATE_SPEED);
   } else {
-    // 右旋回: 左側から正面へ戻る、または右へ振る
-    drive(-ROTATE_SPEED, ROTATE_SPEED);
+    // その場で約360度回転する。
+    rotateInPlace(ROTATE_SPEED);
   }
 }
 
@@ -176,31 +177,30 @@ void approachTarget() {
     return;
   }
 
-  if (!sensors.targetDetected) {
-    approachConfirming = false;
-    state = SEARCH;
+  // 範囲外の値を1～2回受けても接近を続け、3回連続した場合だけ探索へ戻る。
+  if (currentDistanceCm < 0 ||
+      currentDistanceCm > TARGET_DETECTION_RANGE_CM) {
+    approachLostSampleCount++;
+
+    if (approachLostSampleCount >= APPROACH_LOST_CONFIRM_COUNT) {
+      approachLostSampleCount = 0;
+      sensors.targetDetected = false;
+      stopMotors();
+      resetSearchPattern();
+      state = SEARCH;
+      return;
+    }
+
+    // 距離を読めない場合は停止し、大きな距離値の場合は接近を続ける。
+    if (currentDistanceCm < 0) {
+      stopMotors();
+    } else {
+      moveForward(FORWARD_SPEED);
+    }
     return;
   }
 
-  // 対象が探索範囲より遠くなったら接近を中断し、探索をやり直す。
-  if (currentDistanceCm > TARGET_DETECTION_RANGE_CM) {
-    approachConfirming = false;
-    sensors.targetDetected = false;
-    stopMotors();
-    resetSearchPattern();
-    state = SEARCH;
-    return;
-  }
-
-  if (currentDistanceCm < 0) {
-    approachConfirming = false;
-    sensors.targetDetected = false;
-    stopMotors();
-    resetSearchPattern();
-    state = SEARCH;
-    return;
-  }
-
+  approachLostSampleCount = 0;
   moveForward(FORWARD_SPEED);
 }
 

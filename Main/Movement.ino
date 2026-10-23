@@ -26,6 +26,8 @@ static bool carryTurnStarted = false;  // カップ到達後の回転開始
 static bool carryTurnFinished = false; // カップ到達後の回転完了
 static unsigned long carryTurnStartTime = 0;    // カップ到達後、回転開始時刻
 static unsigned long carryForwardStartTime = 0; // カップ到達後、回転完了時刻
+static bool carryClearConfirming = false; // 距離が離れた状態を確認中
+static unsigned long carryClearStartTime = 0; // 離れた状態の確認開始時刻
 
 // カップ到達後の動作をリセットする関数
 void resetCarryMotion() {
@@ -33,6 +35,8 @@ void resetCarryMotion() {
     carryTurnFinished = false;
     carryTurnStartTime = 0;
     carryForwardStartTime = 0;
+    carryClearConfirming = false;
+    carryClearStartTime = 0;
 }
 
 // ゴール・保持機能を実装するまでの仮関数。
@@ -60,18 +64,26 @@ void carryToGoal() {
   // ゴールが未成立の間は、回転後もCARRY状態で前進を続ける。
   if (carryTurnFinished) {
     moveForward(FORWARD_SPEED);
-    bool objectHasCleared =
-        sensors.distanceCm >= CARRY_CLEAR_DISTANCE_CM;
     bool minimumForwardTimePassed =
         millis() - carryForwardStartTime >= CARRY_MIN_FORWARD_TIME_MS;
 
-    // 前進最低時間を過ぎ、測定距離が40cm以上になったら探索へ戻る。
-    if (minimumForwardTimePassed && objectHasCleared) {
-      stopMotors();
-      sensors.targetDetected = false;
-      state = SEARCH;
-      resetSearchPattern();
-      resetCarryMotion();
+    // 40cm以上が一時的に1～2回出ただけではSEARCHへ戻さない。
+    if (minimumForwardTimePassed &&
+        sensors.distanceCm >= CARRY_CLEAR_DISTANCE_CM) {
+      if (!carryClearConfirming) {
+        carryClearConfirming = true;
+        carryClearStartTime = millis();
+      } else if (millis() - carryClearStartTime >=
+                 CARRY_CLEAR_CONFIRM_MS) {
+        stopMotors();
+        sensors.targetDetected = false;
+        state = SEARCH;
+        resetSearchPattern();
+        resetCarryMotion();
+      }
+    } else {
+      // 閾値未満や測距不能(-1)に戻ったら、連続確認をやり直す。
+      carryClearConfirming = false;
     }
     return;
   }
