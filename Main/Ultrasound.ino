@@ -1,6 +1,6 @@
 #include "RobotConfig.h"
 
-// 超音波センサから距離を取得する関数
+// 超音波センサから距離をcm単位で取得し、未測定は-1、接触距離は0にする。
 int distance() {
   unsigned long interval;
   digitalWrite(trig, LOW);
@@ -25,21 +25,21 @@ int distance() {
   return distanceCm;
 }
 
-// 障害物があるかどうかを判定する関数
+// 正の距離が障害物閾値未満なら障害物ありと判定する。
 bool isObstacle(int distanceCm) {
   // OBSTACLE_LIMIT_CM以内の距離を検出した場合にtrueを返す。
   return distanceCm > 0 &&
          distanceCm < OBSTACLE_LIMIT_CM;
 }
 
-// 距離計測結果から障害物の有無を判定する
+// 現在の距離が対象候補の検出範囲内か判定する。
 bool detection() {
   // TARGET_DETECTION_RANGE_CM以内の距離を検出した場合にtrueを返す。
-  return sensors.distanceCm > 0 &&
+  return sensors.distanceCm >= 0 &&
          sensors.distanceCm <= TARGET_DETECTION_RANGE_CM;
 }
 
-// 探索中の基本走行。障害物回避状態への切替はExploration.inoが行う
+// 旧来の基本走行補助。現行の状態機械ではloop()から直接は呼び出さない。
 void transport() {
   if (detection()) {
     stopMotors();
