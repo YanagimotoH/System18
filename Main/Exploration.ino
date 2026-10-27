@@ -1,158 +1,218 @@
 #include <Arduino.h>
 #include "RobotConfig.h"
 
-static int searchStep = 0; // 探索パターンを進めるためのステップ番号
-static unsigned long searchStepStartTime = 0; // 探索パターンのステップ開始時刻を記録する変数
-static bool searchInitialized = false; // 探索パターンの初期化が完了したかどうかを示すフラグ
+static int searchStep = 0; // 探索パターンの段階。2000以上は検出位置の方位を表す
+static unsigned long searchStepStartTime = 0; // 現在の探索段階を開始した時刻
+static bool searchInitialized = false; // 探索パターンを初期化済みか示すフラグ
 
-static bool classifyingObject = false; // 動体か静止物体かを判定する段階
-static bool confirmingTarget = false;  // 候補が視界に残っていることを確認する段階
-static unsigned long targetConfirmStartTime = 0; // 候補が視界に残っていることを確認する段階の開始時刻を記録する変数
-static bool settlingTarget = false; // 停止後、距離が安定するまで待つ段階
-static unsigned long targetSettleStartTime = 0; // 停止後、距離が安定するまで待つ段階の開始時刻を記録する変数
-static unsigned long classificationStartTime = 0; // 動体か静止物体かを判定する段階の開始時刻を記録する変数
-static unsigned long lastClassificationSampleTime = 0; // 動体か静止物体かを判定する段階で、距離を確認した最後の時刻を記録する変数
-static int minimumObservedDistance = 0; // 動体か静止物体かを判定する段階で、観測された最小距離を記録する変数
-static int maximumObservedDistance = 0; // 動体か静止物体かを判定する段階で、観測された最大距離を記録する変数
 static bool approachConfirming = false; // 0～3cmを維持できているか確認中
-static unsigned long approachContactStartTime = 0; // 0～3cmの確認開始時刻
+static unsigned long approachContactStartTime = 0; // 接触確認開始時刻。候補検出時は探索段階の退避にも使う
+static uint8_t targetPulseSamples = 0; // 対象候補の反射を連続確認した回数
+static int pulseTargetDistanceCm = -1; // 直近の反射距離。反射が途切れた場合の候補距離にも使う
+static bool approachTemporarilyLost = false; // 検出位置へ戻って対象を再確認中か示す
+static unsigned long approachLostStartTime = 0; // 最後に反射を受けた時の方位（度）を保持
 
-// サーチパターンの初期化を行う関数
+// 探索段階と、探索・接近確認に使う状態を初期化する。
 void resetSearchPattern() {
-  searchStep = 0;
+  searchStep = 8;
   searchStepStartTime = millis();
   searchInitialized = true;
-  classifyingObject = false;
-  confirmingTarget = false;
-  settlingTarget = false;
   approachConfirming = false;
+  approachTemporarilyLost = false;
+  targetPulseSamples = 0;
 }
 
+// 距離の急変や短い反射を候補として保持し、連続サンプルで対象を絞り込む。
 bool detectTarget() {
-  // 検出範囲内の物体を候補として扱い、静止/移動の判定はsearch()で行う。
-  return detection();
-}
-
-int targetDistance() {
-  // ターゲット検出条件が決まった後、超音波距離を対象距離として使う。
-  return sensors.distanceCm;
-}
-
-void search() {
-  const unsigned long FORWARD_TIME = 500;
-  const unsigned long ROTATE_TIME = SWEEP_150_TIME_MS;
-
-  // 探索へ戻った直後も0～1cmに対象がある場合は、カップを保持中とみなし
-  // SEARCHへ進まず運搬状態を維持する。
-  if (sensors.distanceCm >= 0 && sensors.distanceCm <= 1) {
-    stopMotors();
-    sensors.targetDetected = false;
-    approachConfirming = false;
-    resetCarryMotion();
-    state = CARRY;
-    return;
-  }
-
-  // 候補を旋回中に一定時間見続けてから停止し、測距が落ち着くのを待つ。
-  // 旋回中の距離変化を、対象自身の移動と誤認しないための段階。
-  if (settlingTarget) {
-    stopMotors();
-    if (millis() - targetSettleStartTime >= TARGET_SETTLE_TIME_MS) {
-      settlingTarget = false;
-      classifyingObject = true;
-      classificationStartTime = millis();
-      lastClassificationSampleTime = millis();
-      minimumObservedDistance = sensors.distanceCm;
-      maximumObservedDistance = sensors.distanceCm;
-    }
-    return;
-  }
-  // 候補が視界に残っていることを確認する。
-  // 旋回中に候補が視界から外れた場合は、再度確認をやり直す。
-  if (classifyingObject) {
-    stopMotors();
-
-    if (sensors.distanceCm <= 0 ||
-        sensors.distanceCm > TARGET_DETECTION_RANGE_CM) {
-      classifyingObject = false;
-      searchInitialized = false;
-      sensors.targetDetected = false;
-      state = AVOID;
-      return;
-    }
-    // 動体か静止物体かを判定する段階で、距離の最大値と最小値を記録する。
-    if (millis() - lastClassificationSampleTime >=
-        OBJECT_SAMPLE_INTERVAL_MS) {
-      lastClassificationSampleTime = millis();
-      if (sensors.distanceCm < minimumObservedDistance)
-        minimumObservedDistance = sensors.distanceCm;
-      if (sensors.distanceCm > maximumObservedDistance)
-        maximumObservedDistance = sensors.distanceCm;
-    }
-    // 動体か静止物体かを判定する段階で、一定時間経過したら距離変化を確認する。
-    if (millis() - classificationStartTime >= OBJECT_MOTION_WINDOW_MS) {
-      int distanceChange = maximumObservedDistance - minimumObservedDistance;
-      classifyingObject = false;
-      sensors.targetDetected = false;
-
-      if (distanceChange >= OBJECT_MOTION_THRESHOLD_CM) {
-        // 動く物体をロボット候補として回避する。
-        state = AVOID;
-      } else {
-        // 距離が安定している物体をカップ候補として接近する。
-        sensors.targetDetected = true;
-        state = APPROACH;
+  const int d = sensors.distanceCm;
+  if (d >= 0 && d <= TARGET_DETECTION_RANGE_CM) {
+    if (targetPulseSamples == 0) {
+      targetPulseSamples = 1;
+      pulseTargetDistanceCm = d;
+      approachLostStartTime = (unsigned long)(readHeadingDeg() + 0.5f);
+      return false;
+    } else if (abs(d - pulseTargetDistanceCm) <= 5) {
+      if (targetPulseSamples < 9) ++targetPulseSamples;
+      pulseTargetDistanceCm = d;
+      approachLostStartTime = (unsigned long)(readHeadingDeg() + 0.5f);
+      if (targetPulseSamples >= 2) {
+        approachContactStartTime = (unsigned long)searchStep;
+        // 接近前に元の探索段階を一時退避し、2000+方位角を検出位置として格納する。
+        searchStep = 2000 + (int)approachLostStartTime % 360;
+        targetPulseSamples = 0;
+        return true;
       }
-      return;
+      return false;
+    } else {
+      targetPulseSamples = 1; // 距離が変わったため新しいカップ候補として確認し直す
+      approachLostStartTime = (unsigned long)(readHeadingDeg() + 0.5f);
     }
+    pulseTargetDistanceCm = d;
+    return false;
+  }
+
+  // 短く続いた反射の消失はカップ候補として接近時に確認する。
+  const bool singlePulse = targetPulseSamples > 0 && targetPulseSamples < 9;
+  targetPulseSamples = 0;
+  if (singlePulse) {
+    approachContactStartTime = (unsigned long)searchStep;
+    searchStep = 2000 + (int)approachLostStartTime % 360;
+  }
+  return singlePulse;
+}
+
+// 現在の測定値を優先し、反射が途切れた場合は最後の候補距離を返す。
+int targetDistance() {
+  return sensors.distanceCm >= 0 ? sensors.distanceCm : pulseTargetDistanceCm;
+}
+
+// 探索パターンに沿って走行し、対象候補を見つけたら接近状態へ移る。
+void search() {
+  if (sensors.targetDetected) {
+    // 短く続いた反射候補を接近確認へ渡す。
+    stopMotors();
+    state = APPROACH;
+    approachTemporarilyLost = false;
     return;
   }
   // 探索パターンの初期化を行う。
   if (!searchInitialized) {
-    searchStep = 0;
+    searchStep = 8;
     searchStepStartTime = millis();
     searchInitialized = true;
   }
-  // 候補が視界に残っていることを確認する段階。
-  // 一定時間経過したら停止して距離が安定するのを待つ。
-  if (sensors.targetDetected) {
-    if (!confirmingTarget) {
-      confirmingTarget = true;
-      targetConfirmStartTime = millis();
-    } else if (millis() - targetConfirmStartTime >= TARGET_CONFIRM_TIME_MS) {
-      confirmingTarget = false;
-      stopMotors();
-      settlingTarget = true;
-      targetSettleStartTime = millis();
-      return;
+  // 0/2/4/6は直線走行、100～306は前方150度確認、11～43はレーン切替。
+  if (searchStep == 8) {
+    if (turnToHeading(NORTH_HEADING_DEG)) {
+      searchStep = 0;
+      searchStepStartTime = millis();
     }
-  } else {
-    // 視界から外れた候補は連続確認をやり直す。
-    confirmingTarget = false;
+    return;
   }
-
-  // 前進後、左へ約150度振って正面へ戻し、右へ約150度振って戻す。
-  // 検出されなければこの探索パターンを繰り返す。
-  unsigned long duration = (searchStep == 0) ? FORWARD_TIME : ROTATE_TIME;
-
-  if (millis() - searchStepStartTime >= duration) {
-    searchStep = (searchStep + 1) % 5;
-    searchStepStartTime = millis();
-  }
-
-  if (searchStep == 0) {
+  if (searchStep == 0 || searchStep == 2 ||
+      searchStep == 4 || searchStep == 6) {
     moveForward(FORWARD_SPEED);
-  } else if (searchStep == 1 || searchStep == 4) {
-    // 左旋回: 左へ振る、または右側から正面へ戻る
-    rotateInPlace(ROTATE_SPEED);
-  } else {
-    // 右旋回: 左側から正面へ戻る、または右へ振る
-    drive(-ROTATE_SPEED, ROTATE_SPEED);
+    if (millis() - searchStepStartTime >= 1000) {
+      stopMotors();
+      searchStep = 100 + searchStep;
+    }
+    return;
+  }
+  if (searchStep >= 100 && searchStep < 110) {
+    if (turnToHeading(searchStep % 10 == 0 || searchStep % 10 == 4
+                          ? 285.0f
+                          : 105.0f)) {
+      searchStep += 100;
+    }
+    return;
+  }
+  if (searchStep >= 200 && searchStep < 210) {
+    if (turnToHeading(searchStep % 10 == 0 || searchStep % 10 == 4
+                          ? 75.0f
+                          : 255.0f)) {
+      searchStep += 100;
+    }
+    return;
+  }
+  if (searchStep >= 300 && searchStep < 310) {
+    if (turnToHeading(searchStep % 10 == 0 || searchStep % 10 == 4
+                          ? NORTH_HEADING_DEG
+                          : SOUTH_HEADING_DEG)) {
+      searchStep %= 10;
+      searchStepStartTime = millis();
+    }
+    return;
+  }
+  if (searchStep == 11 && turnToHeading(90.0f)) {
+    searchStep = 12;
+    searchStepStartTime = millis();
+  } else if (searchStep == 12) {
+    moveForward(FORWARD_SPEED);
+    if (millis() - searchStepStartTime >= 800) {
+      stopMotors();
+      searchStep = 13;
+    }
+  } else if (searchStep == 13 && turnToHeading(SOUTH_HEADING_DEG)) {
+    searchStep = 2;
+    searchStepStartTime = millis();
+  } else if (searchStep == 21 && turnToHeading(90.0f)) {
+    searchStep = 22;
+    searchStepStartTime = millis();
+  } else if (searchStep == 22) {
+    moveForward(FORWARD_SPEED);
+    if (millis() - searchStepStartTime >= 800) {
+      stopMotors();
+      searchStep = 23;
+    }
+  } else if (searchStep == 23 && turnToHeading(NORTH_HEADING_DEG)) {
+    searchStep = 0;
+    searchStepStartTime = millis();
+  } else if (searchStep == 31 && turnToHeading(270.0f)) {
+    searchStep = 32;
+    searchStepStartTime = millis();
+  } else if (searchStep == 32) {
+    moveForward(FORWARD_SPEED);
+    if (millis() - searchStepStartTime >= 800) {
+      stopMotors();
+      searchStep = 33;
+    }
+  } else if (searchStep == 33 && turnToHeading(SOUTH_HEADING_DEG)) {
+    searchStep = 6;
+    searchStepStartTime = millis();
+  } else if (searchStep == 41 && turnToHeading(270.0f)) {
+    searchStep = 42;
+    searchStepStartTime = millis();
+  } else if (searchStep == 42) {
+    moveForward(FORWARD_SPEED);
+    if (millis() - searchStepStartTime >= 800) {
+      stopMotors();
+      searchStep = 43;
+    }
+  } else if (searchStep == 43 && turnToHeading(NORTH_HEADING_DEG)) {
+    searchStep = 4;
+    searchStepStartTime = millis();
   }
 }
 
+// 検出した方位へ戻って候補を再確認し、近距離で確認後に運搬状態へ移る。
 void approachTarget() {
   int currentDistanceCm = sensors.distanceCm;
+
+  // カップを検出した瞬間の方位に戻してから、距離を確認する。
+  if (!approachTemporarilyLost) {
+    approachTemporarilyLost = true;
+    stopMotors();
+    return;
+  }
+  if (searchStep < 2000 || searchStep >= 2360 ||
+      !turnToHeading((float)(searchStep - 2000))) {
+    return;
+  }
+
+  if (approachTemporarilyLost) {
+    stopMotors();
+    if (currentDistanceCm < 0 ||
+        currentDistanceCm > TARGET_DETECTION_RANGE_CM) {
+      approachTemporarilyLost = false;
+      sensors.targetDetected = false;
+      resetSearchPattern();
+      state = SEARCH;
+      return;
+    }
+    if (targetPulseSamples < 2) {
+      if (targetPulseSamples == 0) {
+        pulseTargetDistanceCm = currentDistanceCm;
+        targetPulseSamples = 1;
+        return;
+      }
+      if (abs(currentDistanceCm - pulseTargetDistanceCm) > 5) {
+        pulseTargetDistanceCm = currentDistanceCm;
+        return;
+      }
+      targetPulseSamples = 2;
+    }
+    sensors.targetDetected = true;
+  }
 
   // 0～3cmを検出したら、その判定を保持して1秒前進し、CARRYへ移る。
   if (approachConfirming) {
@@ -182,29 +242,10 @@ void approachTarget() {
     return;
   }
 
-  // 対象が探索範囲より遠くなったら接近を中断し、探索をやり直す。
-  if (currentDistanceCm > TARGET_DETECTION_RANGE_CM) {
-    approachConfirming = false;
-    sensors.targetDetected = false;
-    stopMotors();
-    resetSearchPattern();
-    state = SEARCH;
-    return;
-  }
-
-  if (currentDistanceCm < 0) {
-    approachConfirming = false;
-    sensors.targetDetected = false;
-    stopMotors();
-    resetSearchPattern();
-    state = SEARCH;
-    return;
-  }
-
   moveForward(FORWARD_SPEED);
 }
 
-// 障害物回避の段階制御を行う関数
+// 停止・後退・旋回を非ブロッキングで進め、回避前の状態に応じて復帰する。
 void avoidObstacle() {
   // delayしない段階制御にして、回避中もXBeeのSTOPを受信できるようにする。
   static int phase = 0;
@@ -212,30 +253,94 @@ void avoidObstacle() {
   static bool initialized = false;
 
   if (!initialized) {
-    phase = 0;
+    if (previousState == CARRY) {
+      phase = 3;
+    } else if (previousState == SEARCH) {
+      phase = 10;
+      if (searchStep >= 2000 && searchStep < 2360) {
+        searchStep = (int)approachContactStartTime;
+      }
+      if (searchStep >= 100 && searchStep < 310) searchStep %= 10;
+      if (sensors.floorColor == MY_TEAM_COLOR) {
+        searchStep = 8;
+      } else if (isOpponentColor(sensors.floorColor)) {
+        searchStep = 9;
+      } else if (sensors.floorColor == FLOOR_BLACK) {
+        if (searchStep == 0) searchStep = 31;
+        else if (searchStep == 2) searchStep = 41;
+        else if (searchStep == 4) searchStep = 11;
+        else if (searchStep == 6) searchStep = 21;
+        else if (searchStep == 11 || searchStep == 12) searchStep = 33;
+        else if (searchStep == 21 || searchStep == 22) searchStep = 43;
+        else if (searchStep == 31 || searchStep == 32) searchStep = 13;
+        else if (searchStep == 41 || searchStep == 42) searchStep = 23;
+        else if (searchStep == 13) searchStep = 41;
+        else if (searchStep == 23) searchStep = 31;
+        else if (searchStep == 33) searchStep = 21;
+        else if (searchStep == 43) searchStep = 11;
+      }
+    } else {
+      phase = 0;
+      searchStep = 10 + ((int)(readHeadingDeg() + 180.0f) % 360);
+    }
     phaseStartTime = millis();
     initialized = true;
   }
 
-  if (phase == 0) {
+  if (phase == 0 || phase == 3 || phase == 10) {
     stopMotors();
     if (millis() - phaseStartTime >= 100) {
-      phase = 1;
+      phase = phase == 0 ? 1 : (phase == 3 ? 4 : 11);
       phaseStartTime = millis();
     }
-  } else if (phase == 1) {
+  } else if (phase == 1 || phase == 4 || phase == 11) {
     moveBackward(BACKWARD_SPEED);
-    if (millis() - phaseStartTime >= 300) {
-      phase = 2;
+    if (millis() - phaseStartTime >= 1000) {
+      if (phase == 1) {
+        phase = 2;
+        phaseStartTime = millis();
+      } else if (phase == 4) {
+        phase = 5;
+        phaseStartTime = millis();
+      } else {
+        stopMotors();
+        sensors.targetDetected = false;
+        targetPulseSamples = 0;
+        searchStepStartTime = millis();
+        searchInitialized = true;
+        if (searchStep == 8 || searchStep == 9) {
+          phase = 12;
+        } else {
+          state = SEARCH;
+          initialized = false;
+        }
+      }
+    }
+  } else if (phase == 2) {
+    if (turnToHeading((float)(searchStep - 10))) {
+      phase = 6;
       phaseStartTime = millis();
     }
-  } else {
-    rotateInPlace(ROTATE_SPEED);
-    if (millis() - phaseStartTime >= 500) {
+  } else if (phase == 6) {
+    moveForward(FORWARD_SPEED);
+    if (millis() - phaseStartTime >= 1000) {
       stopMotors();
       state = SEARCH;
-      searchInitialized = false;
+      resetSearchPattern();
       initialized = false;
     }
+  } else if (phase == 12) {
+    if (turnToHeading(searchStep == 8 ? NORTH_HEADING_DEG
+                                      : SOUTH_HEADING_DEG)) {
+      searchStep = searchStep == 8 ? 0 : 2;
+      searchStepStartTime = millis();
+      state = SEARCH;
+      initialized = false;
+    }
+  } else {
+    stopMotors();
+    state = CARRY;
+    resetCarryMotion();
+    initialized = false;
   }
 }
