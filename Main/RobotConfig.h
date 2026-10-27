@@ -3,57 +3,47 @@
 
 // ロボットの状態を表す列挙型
 enum RobotState {
-    STOP,     // 停止中
-    SEARCH,   // 対象を探索中
-    APPROACH, // 対象へ接近中
-    AVOID,    // 障害物や境界を回避中
-    CARRY,    // 対象を運搬中
-    GOAL      // ゴール処理中
+    STOP,
+    SEARCH,
+    APPROACH,
+    AVOID,
+    CARRY,
+    GOAL
 };
-
-// 床面色。自チーム色はこの宣言だけを変更して設定する。
-enum FloorColor {
-    FLOOR_UNKNOWN, // 色を判定できない
-    FLOOR_BLACK,   // 黒い外周
-    FLOOR_RED,     // 赤チームの領域
-    FLOOR_BLUE     // 青チームの領域
-};
-const FloorColor MY_TEAM_COLOR = FLOOR_BLUE; // ロボットの所属チーム色
 
 // センサーのデータを格納する構造体
 struct SensorData {
-    int distanceCm;             // 超音波センサの測定距離（cm）
-    int targetDistanceCm;       // 対象までの距離（cm）、未検出時は-1
-    bool obstacle;              // 障害物判定結果
-    bool targetDetected;        // 対象候補の検出結果
-    bool goalDetected;          // ゴール検出結果
-    FloorColor floorColor;      // 現在の床面色
-    float colorRed;             // 色センサの赤成分
-    float colorGreen;           // 色センサの緑成分
-    float colorBlue;            // 色センサの青成分
+    int distanceCm;
+    int targetDistanceCm;
+    bool obstacle;
+    bool targetDetected;
+    bool goalDetected;
 };
 
-const uint8_t ROBOT_ID = 1; // 通信で使用するロボットID
+const uint8_t ROBOT_ID = 1; // ロボットのID
 
 // 超音波センサのピン番号
 const int trig = 2; // 超音波センサのトリガーピン
 const int echo = 4; // 超音波センサのエコーピン
 
-const int buzzerPin = 3; // ブザーを接続するピン
+const int buzzerPin = 3; //ブザーは 3 番ピン
 
 // 距離・速度の設定
 const int OBSTACLE_LIMIT_CM = 15; // 障害物と判定する距離の閾値
 const int APPROACH_LIMIT_CM = 8; // 目標に接近する距離の閾値
-const int TARGET_DETECTION_RANGE_CM = 100; // 0～100cm内の物体だけカップ候補として確認
+const int TARGET_DETECTION_RANGE_CM = 70; // 探索時に物体候補を確認する距離
+const int OBJECT_MOTION_THRESHOLD_CM = 3; // 動体と判定する距離変化
+const unsigned long OBJECT_MOTION_WINDOW_MS = 700; // 動きを確認する時間
+const unsigned long OBJECT_SAMPLE_INTERVAL_MS = 100; // 距離を確認する間隔
+const unsigned long TARGET_CONFIRM_TIME_MS = 300; // 旋回中に候補が視界に残ることを確認する時間
+const unsigned long TARGET_SETTLE_TIME_MS = 150; // 停止後、距離が安定するまで待つ時間
 const int FORWARD_SPEED = 100; // 前進速度
-const int ROTATE_SPEED = 150; // 回転速度
-const unsigned long ROTATE_180_TIME_MS = 2000; // 180度回転時間の初期値。実機で調整
-// 1回目のセンサ準備時に向いていた方向を0°、その反対を180°として扱う。
-const float NORTH_HEADING_DEG = 0.0f; // 基準方向の相対方位
-const float SOUTH_HEADING_DEG = 180.0f; // 基準方向と反対の方位
-const float HEADING_TOLERANCE_DEG = 2.0f; // 方位合わせの許容誤差
+const int ROTATE_SPEED = 130; // 回転速度
+const unsigned long ROTATE_180_TIME_MS = 1000; // 180度回転時間の初期値。実機で調整
 const unsigned long SWEEP_150_TIME_MS =
     ROTATE_180_TIME_MS * 150UL / 180UL; // 約150度旋回する時間
+const unsigned long CARRY_MIN_FORWARD_TIME_MS = 400; // 離脱後、最低限前進する時間
+const int CARRY_CLEAR_DISTANCE_CM = 40; // 運搬中に前方が開けたとみなす距離
 const int BACKWARD_SPEED = 80; // 障害物回避時の速度
 
 extern RobotState state; // 現在のロボットの状態
@@ -64,51 +54,47 @@ extern int motorL; // 左モーターの速度
 extern int motorR; // 右モーターの速度
 
 extern bool robotEnabled; // ロボットが有効かどうかを示すフラグ
-void resetSearchPattern(); // 探索パターンと探索用の状態を初期化する
-void resetCarryMotion(); // 運搬動作の状態を初期化する
-void CalibrationColorSensor(); // 色センサの測定範囲を校正する
-void getRGB(float& r, float& g, float& b); // 校正値を使ってRGB値を取得する
-void updateColor(); // 色センサ値を取得して床面色を更新する
-int identify_color(int red, int green, int blue); // 指定RGB値に近いか判定する
-bool isOpponentColor(FloorColor color); // 指定色が相手チーム色か判定する
-void setupCompass(); // 方位センサを初期化する
-bool calibrateCompass(); // 方位センサの磁気範囲を校正する
-bool captureHeadingReference(); // 現在の方位を相対方位の基準として記録する
-bool compassIsReady(); // 方位センサが初期化済みか返す
-float readHeadingDeg(); // 基準方位からの相対方位を度で取得する
-bool turnToHeading(float targetDeg); // 指定方位への旋回が完了したか判定する
+void resetSearchPattern(); // 探索パターンをリセットする関数
+void resetCarryMotion(); // カップ到達後の動作をリセットする関数
 
 // Movement.inoの関数の宣言
-void drive(int leftSpeed, int rightSpeed); // 左右モーターに速度を設定する（左、右）
-void stopMotors(); // 左右モーターを停止する
-void moveForward(int speed); // 指定速度で前進する
-void moveBackward(int speed); // 指定速度で後退する
-void rotateInPlace(int speed); // 指定速度でその場旋回する
+void drive(int leftSpeed, int rightSpeed); // 左右のモーターの速度を設定する関数
+void stopMotors(); // モーターを停止する関数
+void moveForward(int speed); // 前進する関数
+void moveBackward(int speed); // 後退する関数
+void rotateInPlace(int speed); // その場で回転する関数
 
 // Ultrasound.inoの関数の宣言
-int distance(); // 超音波センサから距離をcm単位で取得する
-bool isObstacle(int distanceCm); // 距離が障害物判定範囲内か返す
-bool detection(); // 現在の距離が対象検出範囲内か返す
-void transport(); // 対象がなければ前進し、検出時に停止する
+int distance(); // 超音波センサーから距離を取得する関数
+bool isObstacle(int distanceCm); // 障害物があるかどうかを判定する関数
+bool detection(); // 超音波センサーで障害物を検出する関数
+void transport(); // 障害物がない間の基本走行を行う関数
 
 // Exploration.inoの関数の宣言
-void search(); // 探索走行と対象候補の確認を行う
-void approachTarget(); // 対象候補へ接近する
-bool detectTarget(); // 対象候補を検出したか返す
-int targetDistance(); // 対象候補までの距離をcm単位で返す
+void search(); // 探索を行う関数
+void approach(); // 目標に接近する関数
+bool detectTarget(); // 目標を検出する関数
+int targetDistance(); // 目標までの距離を取得する関数
 
 
-// Exploration.inoの関数の宣言
-void avoidObstacle(); // 段階的な後退・旋回で障害物を回避する
+// 以下仮
+// ObstacleAvoidance.inoの関数の宣言
+void avoidObstacle(); // 障害物を回避する関数
 
-// Movement.inoの関数の宣言
-void grabCup(); // カップ保持処理を行う（保持機構は未実装）
-bool detectGoal(); // 自チーム色を確認してゴール到達を判定する
-void checkGoal(); // ゴール到達後の処理を進める
-void carryToGoal(); // カップをゴール方向へ運ぶ
-void resumeSearch(); // 運搬後に探索状態へ戻す
+// CupHandling.inoの関数の宣言
+void grabCup(); // カップを掴む関数
+bool isCupHeld(); // カップを保持しているかどうかを判定する関数
+void releaseCup(); // カップを放す関数
+
+// Goal.inoの関数の宣言
+bool detectGoal(); // ゴールを検出する関数
+bool isGoalStatisfied(); // ゴール条件を満たしているかどうかを判定する関数
+void checkGoal(); // ゴール条件を確認する関数
+void carryToGoal(); // ゴールまでカップを運ぶ関数
+void resumeSearch(); // 探索を再開する関数
+void addScore(int points); // スコアを加算する関数
 
 // Communication.inoの関数の宣言
-void sendStatus(); // ロボットID、状態、距離をシリアル送信する
-void receiveCommand(); // シリアルからSTART/STOPコマンドを受信する
+void sendStatus(); // 状態を送信する関数
+void receiveCommand(); // コマンドを受信する関数
 
