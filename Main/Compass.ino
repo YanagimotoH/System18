@@ -153,3 +153,10 @@ bool turnToHeading(float targetDeg) {
   else drive(-speed, speed);
   return false;
 }
+
+// 山登り用
+// 加速度センサーのX軸の値を取得する。
+int readAccelX() {
+  compass.read();
+  return compass.a.x;
+}
