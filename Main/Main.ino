@@ -25,6 +25,22 @@ uint8_t startupStage = 0; // 0:色センサ、1:方位校正、2:実行待ち
 bool buttonWasPressed = false;
 RobotState previousState = STOP;
 
+/*Climb.inoで使う変数*/
+// Processingで山登り担当に選ばれているか
+// true  : 山登り担当
+// false : 通常探索担当
+bool hillAssigned = false;
+
+// この試合中に山登りを実行したか
+// 一度登山を完了したらtrueにする
+// 二度目の山登りを防ぐために使用する
+bool hillUsed = false;
+
+// 現在、山登りミッションを実行しているか
+// 登坂開始から下山完了までtrueにする
+bool hillMissionActive = false;
+
+
 // color.inoで取得・校正したRGB値を、ColorMove.inoの色識別関数で分類する。
 void updateColor() {
   // 通常はカラーセンサのキャリブレーション値を使う。
@@ -91,18 +107,44 @@ void checkButton() {
       buttonWasPressed = button.isPressed();
       return;
     }
-    robotEnabled = !robotEnabled;
-    if (robotEnabled && captureHeadingReference()) {
-      state = SEARCH;
-      resetSearchPattern();
-      Serial1.println("ID=1,STATUS=STARTED");
-    } else if (robotEnabled) {
-      robotEnabled = false;
-      stopMotors();
-      Serial1.println("ID=1,STATUS=HEADING_REFERENCE_FAILED");
+    // 走行開始・停止処理
+    // ロボットが停止中の場合は走行を開始する
+    if (!robotEnabled) {
+        // 現在の向きを基準方位として記録する
+        if (captureHeadingReference()) {
+            // 走行を許可する
+            robotEnabled = true;
+            // 山登り担当かどうかを確認する
+            if (hillAssigned && !hillUsed) {
+            // 山登りミッションを実行状態にする
+            hillMissionActive = true;
+            // この試合では山登りを使用済みにする
+            hillUsed = true;
+            // 山登り開始時の状態を設定する
+            state = SEARCH;
+            } else {
+            // 山登り担当ではない場合は通常探索を行う
+            hillMissionActive = false;
+            // 通常探索を開始する
+            state = SEARCH;
+            // 探索パターンを初期化する
+            resetSearchPattern();
+            }
+            // Processingに走行開始を通知する
+            Serial1.println("ID=1,STATUS=STARTED");
+        } else {
+            // 方位基準の取得に失敗した場合は走行させない
+            robotEnabled = false;
+            stopMotors();
+            Serial1.println("ID=1,STATUS=HEADING_REFERENCE_FAILED");
+        }
     } else {
-      stopMotors();
-      Serial1.println("ID=1,STATUS=STOPPED");
+    // 走行中にボタンを押した場合は停止する
+    robotEnabled = false;
+    // 山登り処理も停止状態にする
+    hillMissionActive = false;
+    stopMotors();
+    Serial1.println("ID=1,STATUS=STOPPED");
     }
   }
 
@@ -118,6 +160,21 @@ void receiveCommand() {
 
     if (c == '\n' || c == '\r') {
       command.trim();
+        // 山登り担当の設定
+        // ProcessingからHILL_ONを受信した場合
+        if (command == "HILL_ON") {
+            // 走行開始前で、まだ山登りを実行していない場合だけ設定
+            if (!robotEnabled && !hillUsed) {
+                hillAssigned = true;
+                Serial1.println("ID=1,STATUS=HILL_ASSIGNED");
+            }
+        } else if (command == "HILL_OFF") { // ProcessingからHILL_OFFを受信した場合
+        // 走行開始前で、まだ山登りを実行していない場合だけ解除
+            if (!robotEnabled && !hillUsed) {
+                hillAssigned = false;
+                Serial1.println("ID=1,STATUS=HILL_UNASSIGNED");
+            }
+        }
 
       if (command == "START") {
         if (startupStage >= 2 && captureHeadingReference()) {
@@ -184,11 +241,27 @@ void setup() {
     stopMotors();
 }
 
-// 入力を先に処理し、センサ判定・境界回避・状態別動作の順に1周期を進める。
+// メインループ
+// 入力処理 → センサー取得 → 山登り判定 → 通常動作
 void loop() {
+    // 黒ラインなどに接触したとき、同じ場所で
+    // 回避処理が何度も開始されるのを防ぐ
     static bool lineAvoidLatched = false;
+    // ボタンとProcessingからの命令を処理
     checkButton();
     receiveCommand();
+    /**/
+    // 加速度センサーのX軸を100msごとに送信する。
+    static unsigned long lastAccelSend = 0;
+
+    if (millis() - lastAccelSend >= 100) {
+        lastAccelSend = millis();
+        Serial1.print("ID=1,ACC_X=");
+        Serial1.println(readAccelX());
+    }
+    /**/
+
+    // ロボットが停止中の場合
     if (!robotEnabled) {
         state = STOP;
         lineAvoidLatched = false;
@@ -197,62 +270,89 @@ void loop() {
         sendStatus();
         return;
     }
+
+    // 超音波センサーから距離を取得
     sensors.distanceCm = distance();
+    // カラーセンサーから床の色を取得
     updateColor();
+    // 障害物が存在するか判定
     sensors.obstacle = isObstacle(sensors.distanceCm);
+
+    // 山登り担当のロボットがミッション実行中なら、
+    // 通常探索ではなく山登り専用処理を実行する
+    if (hillMissionActive) {
+        // 登坂・頂上探索・下山などを進める
+        updateClimbMission();
+        // 山登り処理で決めたモーター速度を反映
+        motors.setSpeeds(motorL, motorR);
+        // Processingへ現在の状態を送信
+        sendStatus();
+        // 通常探索の処理には進まない
+        return;
+    }
+    // 通常探索時の対象物検出
     if (state == SEARCH) {
+        // コップなどの対象物を検出
         sensors.targetDetected = detectTarget();
     }
+    // 対象物が検出されていれば距離を取得
+    // 検出されていなければ-1にする
     sensors.targetDistanceCm = sensors.targetDetected ? targetDistance() : -1;
-    // ゴール直後は青ライン上から内側へ向き直して離れる。ラインを抜けたら通常検知に戻す。
+
+    // ゴール直後に青ライン上から内側へ向き直して離れる。
+    // ラインを抜けたら通常の検知に戻す。
     if (sensors.goalDetected && sensors.floorColor != MY_TEAM_COLOR) {
         sensors.goalDetected = false;
     }
-
-    // 黒い外周と相手色は回避する。自チーム色はCARRYではゴール、SEARCHではライン離脱に使う。
-    // 黒外周・相手色を優先して回避し、自陣色は探索中だけライン離脱に使う。
+    // 黒い外周や相手色に接触した場合は回避する。
+    // 自チーム色はSEARCH中のみライン離脱に使用する。
     if (state != STOP && state != GOAL &&
-        (sensors.floorColor == FLOOR_BLACK ||
-         isOpponentColor(sensors.floorColor) ||
-         (state == SEARCH && sensors.floorColor == MY_TEAM_COLOR &&
-          !sensors.goalDetected))) {
+        (sensors.floorColor == FLOOR_BLACK || isOpponentColor(sensors.floorColor) ||
+         (state == SEARCH && sensors.floorColor == MY_TEAM_COLOR && !sensors.goalDetected))) {
+        // まだ回避処理を開始していない場合
         if (!lineAvoidLatched) {
             lineAvoidLatched = true;
+            // 回避状態へ変更
             state = AVOID;
         }
     } else {
-        // ラインから離れたら次の接触を検出可能にする。
+        // ラインから離れたら次の接触を検出可能にする
         lineAvoidLatched = false;
     }
-
-    // 状態ごとの動作を一箇所で選び、最後にモーター出力と状態通知を反映する。
+    // 通常動作の実行
     switch (state) {
         case STOP:
+            // モーターを停止
             stopMotors();
             break;
         case SEARCH:
+            // 通常探索
             search();
             break;
         case APPROACH:
+            // 対象物へ接近
             approachTarget();
             break;
         case AVOID:
+            // 障害物やラインを回避
             avoidObstacle();
             break;
         case CARRY:
+            // コップを運搬してゴールへ向かう
             carryToGoal();
             break;
         case GOAL:
+            // ゴール判定
             checkGoal();
             break;
     }
-
-    // CARRYへ入った瞬間だけ短く鳴らす。CARRY中は繰り返し鳴らさない。
+    // CARRYへ移行した瞬間だけ短く鳴らす
     if (state == CARRY && previousState != CARRY) {
-        tone(buzzerPin, 440, 50); // CARRY移行時に440Hzを50ms鳴らす
+        tone(buzzerPin, 440, 50);
     }
+    // 現在の状態を保存
     previousState = state;
-
+    // モーター出力と状態通知
     motors.setSpeeds(motorL, motorR);
     sendStatus();
 }
