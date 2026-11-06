@@ -114,9 +114,11 @@ void receiveCommand(); // シリアルからSTART/STOPコマンドを受信す�
 
 // 以下山登り関係
 int readAccelX(); // 加速度センサーのX軸の値を取得する
+int readAccelY();
 
 extern bool hillAssigned; // 山登り担当に設定されているか
 extern bool hillUsed; // この試合ですでに山登りを試みたか
 extern bool hillMissionActive; // 山登りミッションの実行中か
 
 void updateClimbMission(); // 山登りミッションを1周期進める
+void sendAccelDebug();
