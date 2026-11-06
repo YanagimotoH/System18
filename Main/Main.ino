@@ -48,19 +48,18 @@ void updateColor() {
 
   // キャリブレーションを使わず生値の色比率で確認する場合は、上のgetRGB行を
   // コメントアウトし、次のブロックを有効にする。識別基準は8bit色比率の値。
-  /*
-  uint16_t rawR, rawG, rawB, clear;
-  tcs.getRawData(&rawR, &rawG, &rawB, &clear);
-  const uint32_t total = (uint32_t)rawR + rawG + rawB;
-  if (total == 0) {
-    red_G = green_G = blue_G = 0.0f;
-  } else {
-    red_G = (float)rawR * 255.0f / total;
-    green_G = (float)rawG * 255.0f / total;
-    blue_G = (float)rawB * 255.0f / total;
-  }
-  */
-
+  
+  // uint16_t rawR, rawG, rawB, clear;
+  // tcs.getRawData(&rawR, &rawG, &rawB, &clear);
+  // const uint32_t total = (uint32_t)rawR + rawG + rawB;
+  // if (total == 0) {
+  //   red_G = green_G = blue_G = 0.0f;
+  // } else {
+  //   red_G = (float)rawR * 255.0f / total;
+  //   green_G = (float)rawG * 255.0f / total;
+  //   blue_G = (float)rawB * 255.0f / total;
+  // }
+  
   sensors.colorRed = red_G;
   sensors.colorGreen = green_G;
   sensors.colorBlue = blue_G;
@@ -215,15 +214,13 @@ const char* stateName() {
 // ロボットID・状態・距離を200ms間隔でSerial1へ送る。
 void sendStatus() {
   static unsigned long lastSendTime = 0;
-  if (millis() - lastSendTime < 200) {
-    return;
-  }
+  if (millis() - lastSendTime < 200) return;
   lastSendTime = millis();
 
   Serial1.print("ID=");
   Serial1.print(ROBOT_ID);
   Serial1.print(",STATE=");
-  Serial1.print(stateName());
+  Serial1.print(hillMissionActive ? "CLIMB" : stateName());
   Serial1.print(",DIST=");
   Serial1.println(sensors.distanceCm);
 }
