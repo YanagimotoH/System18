@@ -33,7 +33,7 @@ void  CalibrationColorSensor()
     if (g > g_max) g_max = g;
     if (b > b_max) b_max = b;
 
-    if (millis() - timeInit > 2000)
+    if (millis() - timeInit > 3000)
       break;
   }
   

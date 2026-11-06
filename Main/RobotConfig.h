@@ -43,15 +43,18 @@ const int buzzerPin = 3; // ブザーを接続するピン
 
 // 距離・速度の設定
 const int OBSTACLE_LIMIT_CM = 15; // 障害物と判定する距離の閾値
-const int APPROACH_LIMIT_CM = 8; // 目標に接近する距離の閾値
-const int TARGET_DETECTION_RANGE_CM = 100; // 0～100cm内の物体だけカップ候補として確認
-const int FORWARD_SPEED = 100; // 前進速度
-const int ROTATE_SPEED = 150; // 回転速度
+const int APPROACH_LIMIT_CM = 3; // 目標に接近する距離の閾値
+const int TARGET_DETECTION_RANGE_CM = 40; // 0～100cm内の物体だけカップ候補として確認
+const int FORWARD_SPEED = 200; // 前進速度
+const int ROTATE_SPEED = 160; // 方位旋回速度を少し上げる
 const unsigned long ROTATE_180_TIME_MS = 2000; // 180度回転時間の初期値。実機で調整
-// 1回目のセンサ準備時に向いていた方向を0°、その反対を180°として扱う。
-const float NORTH_HEADING_DEG = 0.0f; // 基準方向の相対方位
-const float SOUTH_HEADING_DEG = 180.0f; // 基準方向と反対の方位
-const float HEADING_TOLERANCE_DEG = 2.0f; // 方位合わせの許容誤差
+// 起動時の向きを北(0°)とする相対方位。東=90°、南=180°、西=270°。
+const float NORTH_HEADING_DEG = 0.0f;
+const float EAST_HEADING_DEG = 90.0f;
+const float SOUTH_HEADING_DEG = 180.0f;
+const float WEST_HEADING_DEG = 270.0f;
+const float CARRY_GOAL_HEADING_DEG = SOUTH_HEADING_DEG; // NORTH/EAST/SOUTH/WEST_HEADING_DEGから選択
+const float HEADING_TOLERANCE_DEG = 8.0f; // 1回の方位読み取りで旋回完了とする許容誤差
 const unsigned long SWEEP_150_TIME_MS =
     ROTATE_180_TIME_MS * 150UL / 180UL; // 約150度旋回する時間
 const int BACKWARD_SPEED = 80; // 障害物回避時の速度
@@ -76,7 +79,8 @@ bool calibrateCompass(); // 方位センサの磁気範囲を校正する
 bool captureHeadingReference(); // 現在の方位を相対方位の基準として記録する
 bool compassIsReady(); // 方位センサが初期化済みか返す
 float readHeadingDeg(); // 基準方位からの相対方位を度で取得する
-bool turnToHeading(float targetDeg); // 指定方位への旋回が完了したか判定する
+int getHeadingRotationSign(); // 方位誤差を減らすモーター旋回方向を返す
+bool turnToHeading(float targetDeg, float toleranceDeg = HEADING_TOLERANCE_DEG); // 指定方位への旋回が完了したか判定する
 
 // Movement.inoの関数の宣言
 void drive(int leftSpeed, int rightSpeed); // 左右モーターに速度を設定する（左、右）
@@ -108,9 +112,10 @@ void checkGoal(); // ゴール到達後の処理を進める
 void carryToGoal(); // カップをゴール方向へ運ぶ
 void resumeSearch(); // 運搬後に探索状態へ戻す
 
-// Communication.inoの関数の宣言
 void sendStatus(); // ロボットID、状態、距離をシリアル送信する
 void receiveCommand(); // シリアルからSTART/STOPコマンドを受信する
+
+const float CARRY_HEADING_TOLERANCE_DEG = 35.0f; // ゴール方位の35°以内に入ったら前進
 
 // 以下山登り関係
 int readAccelX(); // 加速度センサーのX軸の値を取得する

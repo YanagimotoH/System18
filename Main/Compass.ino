@@ -53,7 +53,7 @@ bool calibrateCompass() {
     }
     previousAngle = angle;
     havePreviousAngle = true;
-    delay(50);
+    delay(30);
   }
   motors.setSpeeds(0, 0);
   motorL = motorR = 0;
@@ -62,8 +62,12 @@ bool calibrateCompass() {
   const int32_t rangeY = (int32_t)maxY - minY;
   Serial1.print("ID=1,CAL_X="); Serial1.print(rangeX);
   Serial1.print(",CAL_Y="); Serial1.println(rangeY);
-  if (fabs(accumulatedTurn) > 30.0f)
+  if (fabs(accumulatedTurn) > 30.0f) {
     rotationHeadingSign = accumulatedTurn > 0.0f ? 1 : -1;
+  } else {
+    rotationHeadingSign = -1; // 方位が減る場合。増える場合は1
+  }
+  // 磁気値の変化が小さい場合は校正失敗として、生値方位に切り替える。
   if (rangeX < 40 || rangeY < 40) {
     compassCalibrated = false;
     return false;
@@ -121,10 +125,12 @@ float readHeadingDeg() {
   return relativeAngle;
 }
 
-// 仮の共通方位合わせ。山登り・カップ回収の動作自体は担当メンバーが実装予定。
-// 目標方位への最短旋回を行い、許容角内を2回連続で確認したら完了する。
-bool turnToHeading(float targetDeg) {
-  static uint8_t settledSamples = 0;
+int getHeadingRotationSign() {
+  return rotationHeadingSign;
+}
+
+// 目標方位への最短旋回を固定速度で行い、指定した許容角内に入ったら完了する。
+bool turnToHeading(float targetDeg, float toleranceDeg) {
   if (!compassReady) {
     stopMotors();
     return false;
@@ -135,20 +141,16 @@ bool turnToHeading(float targetDeg) {
     stopMotors();
     return false;
   }
+
   float error = targetDeg - current;
   while (error > 180.0f) error -= 360.0f;
   while (error < -180.0f) error += 360.0f;
 
-  if (fabs(error) <= HEADING_TOLERANCE_DEG) {
+  if (fabs(error) <= toleranceDeg) {
     stopMotors();
-    if (++settledSamples >= 2) {
-      settledSamples = 0;
-      return true;
-    }
-    return false;
+    return true;
   }
-  settledSamples = 0;
-  const int speed = constrain((int)(fabs(error) * 1.2f), 35, ROTATE_SPEED);
+  const int speed = ROTATE_SPEED;
   if (error * rotationHeadingSign > 0) rotateInPlace(speed);
   else drive(-speed, speed);
   return false;
@@ -158,5 +160,8 @@ bool turnToHeading(float targetDeg) {
 // 加速度センサーのX軸の値を取得する。
 int readAccelX() {
   compass.read();
-  return compass.a.x;
+  const int accelX = compass.a.x;
+  // センサ通信異常時の飽和値（例: -32760）を山登り判定・Processingへ流さない。
+  if (accelX <= -32000 || accelX >= 32000) return 0;
+  return accelX;
 }
