@@ -159,9 +159,30 @@ bool turnToHeading(float targetDeg, float toleranceDeg) {
 // 山登り用
 // 加速度センサーのX軸の値を取得する。
 int readAccelX() {
-  compass.read();
-  const int accelX = compass.a.x;
-  // センサ通信異常時の飽和値（例: -32760）を山登り判定・Processingへ流さない。
-  if (accelX <= -32000 || accelX >= 32000) return 0;
-  return accelX;
+  compass.readAcc(); //加速度センサーだけを読み取る
+  return compass.a.x; //x軸の測定値を返す
+}
+// 左右方向の加速度を取得する
+int readAccelY() {
+  compass.readAcc();
+  return compass.a.y;
+}
+// 加速度センサーのX軸・Y軸・Z軸を読み取り、診断情報を送信する。
+void sendAccelDebug() {
+  compass.readAcc();
+
+  Serial1.print("ID=1,ACC_X=");
+  Serial1.print(compass.a.x);
+
+  Serial1.print(",ACC_Y=");
+  Serial1.print(compass.a.y);
+
+  Serial1.print(",ACC_Z=");
+  Serial1.print(compass.a.z);
+
+  Serial1.print(",I2C_STATUS=");
+  Serial1.print(compass.last_status);
+
+  Serial1.print(",TIMEOUT=");
+  Serial1.println(compass.timeoutOccurred() ? 1 : 0);
 }
