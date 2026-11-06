@@ -252,12 +252,12 @@ void loop() {
     receiveCommand();
     /**/
     // 加速度センサーのX軸を100msごとに送信する。
+    // 加速度センサーの診断情報を100msごとに送信する。
     static unsigned long lastAccelSend = 0;
 
     if (millis() - lastAccelSend >= 100) {
         lastAccelSend = millis();
-        Serial1.print("ID=1,ACC_X=");
-        Serial1.println(readAccelX());
+        sendAccelDebug();
     }
     /**/
 
