@@ -38,7 +38,7 @@ const int CLIMB_FLAT_THRESHOLD = 700;
 const unsigned long CLIMB_DETECT_TIME = 100;
 
 // 山頂で停止する時間
-const unsigned long CLIMB_TOP_WAIT_TIME = 1000;
+const unsigned long CLIMB_TOP_WAIT_TIME = 200;
 
 // 山登りの状態を初期化する
 void resetClimbMission() {
