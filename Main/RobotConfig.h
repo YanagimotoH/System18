@@ -118,8 +118,7 @@ void receiveCommand(); // シリアルからSTART/STOPコマンドを受信す�
 const float CARRY_HEADING_TOLERANCE_DEG = 35.0f; // ゴール方位の35°以内に入ったら前進
 
 // 以下山登り関係
-int readAccelX(); // 加速度センサーのX軸の値を取得する
-int readAccelY();
+void readAccelXY(int &x, int &y); // 加速度センサーのX,Y軸の値を取得する
 
 extern bool hillAssigned; // 山登り担当に設定されているか
 extern bool hillUsed; // この試合ですでに山登りを試みたか
