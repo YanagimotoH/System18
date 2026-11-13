@@ -157,15 +157,12 @@ bool turnToHeading(float targetDeg, float toleranceDeg) {
 }
 
 // 山登り用
-// 加速度センサーのX軸の値を取得する。
-int readAccelX() {
-  compass.readAcc(); //加速度センサーだけを読み取る
-  return compass.a.x; //x軸の測定値を返す
-}
-// 左右方向の加速度を取得する
-int readAccelY() {
+// 加速度センサーのX軸とY軸を同時に読み取る
+void readAccelXY(int &x, int &y) {
   compass.readAcc();
-  return compass.a.y;
+
+  x = compass.a.x;
+  y = compass.a.y;
 }
 // 加速度センサーのX軸・Y軸・Z軸を読み取り、診断情報を送信する。
 void sendAccelDebug() {
