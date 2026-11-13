@@ -223,6 +223,13 @@ void sendStatus() {
   Serial1.print(hillMissionActive ? "CLIMB" : stateName());
   Serial1.print(",DIST=");
   Serial1.println(sensors.distanceCm);
+  // カラーセンサーのRGB値を送信
+  Serial1.print(",R=");
+  Serial1.print(sensors.colorRed);
+  Serial1.print(",G=");
+  Serial1.print(sensors.colorGreen);
+  Serial1.print(",B=");
+  Serial1.println(sensors.colorBlue);
 }
 
 // シリアル、方位・超音波センサ、モーターを初期化する。
