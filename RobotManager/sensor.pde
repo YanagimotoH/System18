@@ -13,9 +13,6 @@ void readSensorData(int id) {
 
     // まだ改行までのデータが届いていない場合は次の処理へ進む
     if (line == null) continue;
-    
-    //ArduinoのIDの確認用
-    println("COM" + portNames[id] + " : " + line);
 
     // 文字列の前後にある空白や改行を取り除く
     line = trim(line);
@@ -44,6 +41,27 @@ void readSensorData(int id) {
       }
     }
 
+    // IDがないデータの場合はRGBだけ更新する
+    if (receivedId == -1) {
+      for (int i = 0; i < data.length; i++) {
+        String[] pair = split(data[i], '=');
+    
+        if (pair.length != 2) continue;
+    
+        String key = trim(pair[0]);
+        String value = trim(pair[1]);
+    
+        if (key.equals("R")) {
+          sensorColor[id][0] = constrain((int)float(value), 0, 255);
+        } else if (key.equals("G")) {
+          sensorColor[id][1] = constrain((int)float(value), 0, 255);
+        } else if (key.equals("B")) {
+          sensorColor[id][2] = constrain((int)float(value), 0, 255);
+        }
+      }
+    
+      continue;
+    }
     // ArduinoのID=1はProcessingの配列番号0に対応する
     // 自分が管理しているロボット以外のデータは無視する
     if (receivedId != robotIds[id]) continue;
@@ -80,15 +98,28 @@ void readSensorData(int id) {
         }
       } else if (key.equals("DIST")) {  // DISTの場合は距離センサの値を更新する
         distanceCm[id] = int(value);
-      } else if (key.equals("ACC_X")) {
-          // 加速度センサーのX軸の値を更新する
-          ax[id] = float(value);
-      } else if (key.equals("STATUS")) { // STATUS：Arduinoから送られてきた状態通知を処理する
+      } else if (key.equals("ACC_X")) { //X軸の加速度を受信
+        ax[id] = float(value);
+      
+        // 平地でのX軸の値を基準に傾きを計算
+        float flatAx = -50.0;
+      
+        // 加速度の値を角度に変換（暫定計算）
+        pitch[id] = -degrees(
+          asin(constrain((ax[id] - flatAx) / 16384.0, -1.0, 1.0))
+        );
+      } else if (key.equals("R")) { //RGB値
+        sensorColor[id][0] = constrain((int)float(value), 0, 255);
+      } else if (key.equals("G")) {
+        sensorColor[id][1] = constrain((int)float(value), 0, 255);
+      } else if (key.equals("B")) {
+        sensorColor[id][2] = constrain((int)float(value), 0, 255);
+      }else if (key.equals("STATUS")) { // STATUS：Arduinoから送られてきた状態通知を処理する
         // 通常の走行開始通知
-       if (value.equals("STARTED")) {
+        if (value.equals("STARTED")) {
           // ロボットが走行中であることを記録する
           state[id] = 1;
-          } else if (value.equals("STOPPED")) { // 通常の走行停止通知
+        } else if (value.equals("STOPPED")) { // 通常の走行停止通知
           // ロボットが停止したことを記録する
           state[id] = 0;
       
