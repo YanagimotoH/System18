@@ -58,9 +58,11 @@ void drawZumo(int id, float x, float y) {
   text("Color", x + pw - 25, y + 25);
 
   // センサから取得した色を四角形で表示する
-  fill(sensorColor[id][0],
+  colorMode(RGB, 255);
+  color c = color(sensorColor[id][0],
        sensorColor[id][1],
        sensorColor[id][2]);
+  fill(c);
   stroke(255);
   rectMode(CORNER);
   rect(x + pw - 65, y + 48, 40, 25);
@@ -75,12 +77,10 @@ void drawZumo(int id, float x, float y) {
   textSize(15);
 
   // 前後方向の傾き
-  text("PITCH: " + nf(pitch[id], 1, 1) + " deg",
-       x + 20, y + ph - 35);
+  text("PITCH: " + nf(pitch[id], 1, 1) + " deg", x + 20, y + ph - 35);
 
   // 左右方向の傾き
-  text("ROLL: " + nf(roll[id], 1, 1) + " deg",
-       x + 20, y + ph - 12);
+  //text("ROLL: " + nf(roll[id], 1, 1) + " deg", x + 20, y + ph - 12);
 }
 
 
