@@ -9,6 +9,7 @@ unsigned long hostMillis = 0;
 int hostDistanceCm = -1;
 int hostFloor = FLOOR_UNKNOWN;
 float hostHeading = 0.0f;
+bool hostButtonPressed = false;
 int hostCalibrationMotorL = 0;
 int hostCalibrationMotorR = 0;
 
@@ -27,6 +28,7 @@ void hostAdvanceTime(unsigned long value) {
 }
 
 void CalibrationColorSensor() {}
+void updateClimbMission() {}
 
 void getRGB(float& red, float& green, float& blue) {
   switch (hostFloor) {

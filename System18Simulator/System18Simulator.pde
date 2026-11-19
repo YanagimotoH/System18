@@ -10,7 +10,13 @@ final float HILL_X=120, HILL_Y=81, HILL_RX=35.5, HILL_RY=35, HILL_H=15;
 final int TARGET_RANGE=100, OBSTACLE_LIMIT=15;
 final float FORWARD_SPEED=100, BACKWARD_SPEED=80, ROTATE_SPEED=150;
 final float ROTATE_180_TIME_MS=2000, SWEEP_MS=ROTATE_180_TIME_MS*150.0/180.0;
+// Map compass: from the blue goal line toward the field center is North.
+final float MAP_NORTH_HEADING=180;
+final String[] COMPASS_LABELS={"N","E","S","W"};
+final int[] COMPASS_LABEL_X={-21,-7,7,-7}, COMPASS_LABEL_Y={0,-8,0,8};
+final float[] compassScreenX=new float[4], compassScreenY=new float[4];
 final float SOUTH_HEADING=180, HEADING_TOLERANCE=12;
+final float CARRIED_CUP_OFFSET=9;
 final float FIXED_DT=1.0/60.0;
 
 Robot bot;
@@ -41,17 +47,27 @@ class Robot {
   boolean enabled=false;
   boolean compassReady=false, compassCalibrated=false;
   boolean headingReferenceReady=false;
+  float headingDelta=-1;
   boolean targetDetected=false, obstacle=false;
   int distance=-1,targetDistance=-1,floor=FLOOR_UNKNOWN;
   float matchTime=0;
   float previousState=STOP;
-  Cup carriedCup=null;
+  boolean fallbackController=false;
+  float headingReference=-1,searchPhaseStart=0,goalReturnHeading=-1,goalSequenceStart=0;
+  int searchHeadingIndex=0,goalSequencePhase=0,ownColorSamples=0;
+  boolean searchForwarding=true,carryTurnFinished=false;
+  Cup sensedCup=null, carriedCup=null;
   Process controllerProcess;
   BufferedWriter controllerInput;
   BufferedReader controllerOutput;
   String pendingCommand="-";
 
-  void setState(int s) { if(state!=s) lastEvent=name(state)+" → "+name(s); state=s; }
+  void setState(int s) {
+    if(state==s) return;
+    if(s==CARRY && carriedCup==null) carriedCup=sensedCup;
+    lastEvent=name(state)+" → "+name(s);
+    state=s;
+  }
   void setDrive(float l,float r) { left=constrain(l,-250,250); right=constrain(r,-250,250); }
   void stop() { setDrive(0,0); }
   void forward(float s) { setDrive(s,s); }
@@ -76,22 +92,16 @@ class Robot {
   }
 
   void buttonPress() {
-    if(stage==0) { stop(); stage=1; compassReady=true; lastEvent="COLOR_READY: simulated 2-second calibration"; return; }
-    if(stage==1) { stop(); stage=2; compassCalibrated=true; lastEvent="COMPASS_CALIBRATED: simulated rotation calibration"; return; }
-    if(!enabled) {
-      headingReferenceReady=true;
-      enabled=true; pendingCommand="START"; lastEvent="STARTED: heading reference captured";
-    } else { enabled=false; pendingCommand="STOP"; stop(); lastEvent="STOPPED by button"; }
+    if(stage>=2 && !enabled) heading=MAP_NORTH_HEADING;
+    stop();
+    pendingCommand="BUTTON";
+    lastEvent="BUTTON: sent to Main.ino";
   }
 
   void command(String cmd) {
-    if(cmd.equals("START")) {
-      if(stage>=2 && compassReady) {
-        headingReferenceReady=true; enabled=true; pendingCommand="START"; lastEvent="STARTED by Serial1 command";
-      } else lastEvent="CALIBRATE_FIRST: press button twice first";
-    } else if(cmd.equals("STOP")) {
-      enabled=false; pendingCommand="STOP"; stop(); lastEvent="STOPPED by Serial1 command";
-    }
+    if(cmd.equals("START") && stage>=2 && !enabled) heading=MAP_NORTH_HEADING;
+    pendingCommand=cmd;
+    lastEvent=cmd+": sent to Main.ino";
   }
 
   int raycastDistance() {
@@ -101,7 +111,13 @@ class Robot {
       float vx=c.x-x,vy=c.y-y,along=vx*dx+vy*dy,side=abs(vx*dy-vy*dx);
       if(along>0 && along<=100 && side<5.6 && along<alongBest) { best=c; alongBest=along; }
     }
-    if(best!=null) { int cupDistance=round(dist(x,y,best.x,best.y)); return best==carriedCup || cupDistance<=2?0:cupDistance; }
+    sensedCup=best;
+    if(best!=null) {
+      // 接近中は車体前端がカップに届いた時点で接触扱いにする。
+      if(best==carriedCup || (state==APPROACH && alongBest<CARRIED_CUP_OFFSET)) return 0;
+      int cupDistance=round(dist(x,y,best.x,best.y));
+      return cupDistance<=2?0:cupDistance;
+    }
     // シミュレーションの超音波反射対象はカップのみ。フィールド境界はエコーとして返さない。
     return -1;
   }
@@ -111,6 +127,7 @@ class Robot {
     distance=raycastDistance();
     floor=surfaceAt(x,y);
     obstacle=distance>0 && distance<OBSTACLE_LIMIT;
+    if(fallbackController) { tickFallback(); return; }
     if(controllerProcess==null || !controllerProcess.isAlive()) { stop(); return; }
     try {
       controllerInput.write(round(matchTime*1000)+" "+distance+" "+floor+" "+heading+" "+pendingCommand);
@@ -126,12 +143,15 @@ class Robot {
         targetDetected=parseInt(values[4])!=0;
         int measuredDistance=parseInt(values[5]);
         targetDistance=targetDetected ? (measuredDistance>=0?measuredDistance:distance) : -1;
-        if(oldState!=CARRY && state==CARRY && carriedCup==null) {
-          carriedCup=nearestCupAhead();
-          if(carriedCup==null) {
-            float nearest=12;
-            for(Cup c:cups) if(!c.delivered && dist(x,y,c.x,c.y)<nearest) { carriedCup=c; nearest=dist(x,y,c.x,c.y); }
-          }
+        if(values.length>=10) {
+          int previousStage=stage;
+          stage=parseInt(values[6]);
+          headingDelta=parseFloat(values[7]);
+          heading=wrap360(parseFloat(values[8]));
+          compassCalibrated=stage>=2;
+          headingReferenceReady=headingDelta>=0;
+          if(!values[9].equals("-")) lastEvent=values[9];
+          else if(previousStage!=stage) lastEvent="Stage changed: "+stage;
         }
         if(oldState==GOAL && state==SEARCH && carriedCup!=null) {
           carriedCup.delivered=true;
@@ -147,6 +167,105 @@ class Robot {
     previousState=state;
   }
 
+  void tickFallback() {
+    String command=pendingCommand;
+    pendingCommand="-";
+    if(command.equals("BUTTON")) {
+      if(stage==0) { stage=1; lastEvent="COLOR_READY"; }
+      else if(stage==1) {
+        float angular=(-30.0/8.5)*6.25;
+        heading=wrap360(heading+degrees(angular));
+        compassCalibrated=true; stage=2; lastEvent="COMPASS_CALIBRATED";
+      } else if(!enabled) {
+        captureFallbackReference(); lastEvent="STARTED";
+      } else { enabled=false; state=STOP; stop(); lastEvent="STOPPED"; }
+    } else if(command.equals("START")) {
+      if(stage>=2) { captureFallbackReference(); lastEvent="STARTED"; }
+      else lastEvent="CALIBRATE_FIRST";
+    } else if(command.equals("STOP")) {
+      enabled=false; state=STOP; stop(); lastEvent="STOPPED";
+    }
+
+    headingDelta=headingReference<0?-1:wrap360(heading-headingReference);
+    if(!enabled) { state=STOP; stop(); return; }
+
+    distance=raycastDistance();
+    floor=surfaceAt(x,y);
+    obstacle=distance>0 && distance<OBSTACLE_LIMIT;
+    if(state==SEARCH) {
+      if(distance>=0 && distance<=TARGET_RANGE) {
+        targetDetected=true; state=APPROACH; stop(); return;
+      }
+      if(searchForwarding) {
+        if(matchTime-searchPhaseStart<1.0) { forward(FORWARD_SPEED); return; }
+        stop(); searchForwarding=false; searchHeadingIndex=0; return;
+      }
+      float[] headings={45,90,135,180,225,270,315,0};
+      if(fallbackTurnTo(headings[searchHeadingIndex],HEADING_TOLERANCE)) {
+        searchHeadingIndex++;
+        if(searchHeadingIndex>=headings.length) {
+          searchHeadingIndex=0; searchForwarding=true; searchPhaseStart=matchTime;
+        }
+      }
+      return;
+    }
+    if(state==APPROACH) {
+      if(distance<0) { targetDetected=false; state=SEARCH; stop(); return; }
+      if(distance<=3) {
+        targetDetected=false; setState(CARRY);
+        carryTurnFinished=false; ownColorSamples=0; stop(); return;
+      }
+      forward(100); return;
+    }
+    if(state==CARRY) {
+      if(floor==teamColor) ownColorSamples++; else ownColorSamples=0;
+      if(ownColorSamples>=3) {
+        goalReturnHeading=headingDelta; goalSequencePhase=0; state=GOAL; stop(); return;
+      }
+      if(!carryTurnFinished) {
+        if(fallbackTurnTo(SOUTH_HEADING,HEADING_TOLERANCE)) {
+          carryTurnFinished=true; stop();
+        }
+        return;
+      }
+      forward(FORWARD_SPEED); return;
+    }
+    if(state==GOAL) {
+      if(goalSequencePhase==0) {
+        goalSequenceStart=matchTime; goalSequencePhase=1; backward(BACKWARD_SPEED); return;
+      }
+      if(goalSequencePhase==1 && matchTime-goalSequenceStart<2.0) {
+        backward(BACKWARD_SPEED); return;
+      }
+      goalSequencePhase=2;
+      if(goalReturnHeading<0) { stop(); return; }
+      if(!fallbackTurnTo(wrap360(goalReturnHeading+180),HEADING_TOLERANCE)) return;
+      if(carriedCup!=null) {
+        carriedCup.delivered=true; scoreCup(carriedCup,teamColor); carriedCup=null;
+      }
+      state=SEARCH; goalSequencePhase=0; carryTurnFinished=false;
+      searchForwarding=true; searchPhaseStart=matchTime; searchHeadingIndex=0;
+      lastEvent="GOAL: backed up and resumed SEARCH"; stop(); return;
+    }
+    stop();
+  }
+
+  void captureFallbackReference() {
+    headingReference=heading; headingDelta=0; headingReferenceReady=true;
+    enabled=true; state=SEARCH; searchForwarding=true;
+    searchHeadingIndex=0; searchPhaseStart=matchTime;
+  }
+
+  boolean fallbackTurnTo(float target,float tolerance) {
+    float error=target-headingDelta;
+    while(error>180) error-=360;
+    while(error< -180) error+=360;
+    if(abs(error)<=tolerance) { stop(); return true; }
+    setDrive(error<0?ROTATE_SPEED:-ROTATE_SPEED,
+             error<0?-ROTATE_SPEED:ROTATE_SPEED);
+    return false;
+  }
+
   void physics(float dt) {
     float vl=left*.075,vr=right*.075,wheelBase=8.5;
     float linear=(vl+vr)*.5,angular=(vr-vl)/wheelBase;
@@ -155,9 +274,7 @@ class Robot {
     Cup c=nearestCupAhead();
     float cx,cy;
     if(c!=null && linear>0) {
-      if(carriedCup==null && (state==APPROACH || state==CARRY)) {
-        carriedCup=c;
-      } else if(carriedCup!=null) {
+      if(carriedCup!=null) {
         cx=(c.x-x)*sin(radians(heading))-(c.y-y)*cos(radians(heading));
         cy=cx<0?90:-90;
         c.x=constrain(c.x+cos(radians(heading+cy))*linear*dt,-4,FIELD_W+4);
@@ -175,17 +292,14 @@ class Robot {
     x=constrain(x+(nx-x)*slopeFactor,-10,FIELD_W+10);
     y=constrain(y+(ny-y)*slopeFactor,-10,FIELD_H+10);
     if(carriedCup!=null && state!=GOAL) {
-      cx=x+cos(radians(heading))*7;
-      cy=y+sin(radians(heading))*7;
-      if(cx< -3) { carriedCup.delivered=true; scoreCup(carriedCup,FLOOR_RED); carriedCup=null; }
-      else if(cx>FIELD_W+3) { carriedCup.delivered=true; scoreCup(carriedCup,FLOOR_BLUE); carriedCup=null; }
-      else { carriedCup.x=cx; carriedCup.y=cy; }
+      carriedCup.x=x+cos(radians(heading))*CARRIED_CUP_OFFSET;
+      carriedCup.y=y+sin(radians(heading))*CARRIED_CUP_OFFSET;
     }
   }
   Cup nearestCupAhead() {
     Cup best=null; float bd=9;
     float dx=cos(radians(heading)),dy=sin(radians(heading));
-    for(Cup c:cups) if(!c.delivered && c!=carriedCup) {
+    for(Cup c:cups) if(!c.delivered && c!=carriedCup && (state!=APPROACH || c!=sensedCup)) {
       float vx=c.x-x,vy=c.y-y,along=vx*dx+vy*dy,side=abs(vx*dy-vy*dx);
       if(along>0 && along<bd && side<5.8) { best=c; bd=along; }
     }
@@ -246,12 +360,13 @@ void resetSimulation() {
 void draw() {
   float now=millis(),dt=min(.1,(now-previousMs)/1000.0); previousMs=now;
   if(bot.controllerProcess==null && controllerExecutable!=null && controllerBuildError.length()==0) bot.startController();
+  if(bot.controllerProcess==null && !controllerBuildError.startsWith("Building native")) bot.fallbackController=true;
   if(!paused) {
     accumulator+=dt*simSpeed;
     while(accumulator>=FIXED_DT) { bot.tick(FIXED_DT); bot.physics(FIXED_DT); accumulator-=FIXED_DT; }
   }
   background(218,228,235);
-  drawScene(); drawHud();
+  drawScene(); drawOverlay();
 }
 
 void drawScene() {
@@ -273,7 +388,7 @@ void drawScene() {
   // Keep diagram coordinates upright: y=0 is the far/top side, y grows down.
   scale(2.3,2.3,2.3);
   translate(-FIELD_W/2,-FIELD_H/2,0);
-  drawArena(); drawMountain();
+  drawArena(); drawCompassMarker(); drawMountain();
   for(Cup c:cups) if(!c.delivered) drawCup(c);
   drawRobot();
   if(showSensor && bot.distance>0) {
@@ -297,6 +412,22 @@ void drawArena() {
   fill(218,53,53); beginShape(QUADS); vertex(0,BORDER,.3);vertex(BORDER,BORDER,.3);vertex(BORDER,FIELD_H-BORDER,.3);vertex(0,FIELD_H-BORDER,.3);endShape();
   fill(45,95,225); beginShape(QUADS); vertex(FIELD_W-BORDER,BORDER,.3);vertex(FIELD_W,BORDER,.3);vertex(FIELD_W,FIELD_H-BORDER,.3);vertex(FIELD_W-BORDER,FIELD_H-BORDER,.3);endShape();
   stroke(155); strokeWeight(.2); noFill(); rect(0,0,FIELD_W,FIELD_H);
+}
+
+// 地図上のNorthは青ライン中央からフィールド中心へ向かう方向。
+void drawCompassMarker() {
+  float x=FIELD_W-BORDER-4, y=FIELD_H/2, z=.9;
+  pushStyle();
+  stroke(22,42,58); strokeWeight(.9);
+  line(x,y,z,x-16,y,z);
+  line(x-16,y,z,x-11,y-3,z);
+  line(x-16,y,z,x-11,y+3,z);
+  popStyle();
+  // 地図上の位置を画面へ投影し、文字は画面に正対させる。
+  for(int i=0;i<COMPASS_LABELS.length;i++) {
+    compassScreenX[i]=screenX(x+COMPASS_LABEL_X[i],y+COMPASS_LABEL_Y[i],z);
+    compassScreenY[i]=screenY(x+COMPASS_LABEL_X[i],y+COMPASS_LABEL_Y[i],z);
+  }
 }
 
 void drawMountain() {
@@ -337,13 +468,25 @@ void drawRobot() {
   noStroke(); fill(48,115,160); box(10,9,4);
   fill(28); pushMatrix(); translate(0,-5.4,-.5); box(7,2,4.5); popMatrix();
   pushMatrix(); translate(0,5.4,-.5); box(7,2,4.5); popMatrix();
-  fill(240,70,55); beginShape(TRIANGLES); vertex(7,0,1);vertex(4,-2.5,1);vertex(4,2.5,1);endShape(); popMatrix();
+  fill(240,70,55); beginShape(TRIANGLES); vertex(7,0,1);vertex(4,-2.5,1);vertex(4,2.5,1);endShape();
+  popMatrix();
+}
+
+void drawOverlay() {
+  // 標準カメラでは z=0 の座標が左上原点の画面座標に一致する。
+  hint(DISABLE_DEPTH_TEST); camera(); perspective(); noLights();
+  pushStyle();
+  fill(22,42,58); textAlign(CENTER,CENTER); textSize(15);
+  for(int i=0;i<COMPASS_LABELS.length;i++) {
+    text(COMPASS_LABELS[i],compassScreenX[i],compassScreenY[i]);
+  }
+  popStyle();
+  drawHud(); drawStateBanner();
+  hint(ENABLE_DEPTH_TEST);
 }
 
 void drawHud() {
   float x=18;
-  hint(DISABLE_DEPTH_TEST); camera(); ortho(); noLights();
-  translate(-width/2,-height/2,0);
   fill(18,30,42); noStroke(); rect(x,18,365,735,12);
   fill(255); textSize(22); text("System18 Simulator",x+22,60);
   textSize(15); fill(210,224,232);
@@ -354,23 +497,33 @@ void drawHud() {
   text("Floor: "+floorName(bot.floor)+"    Obstacle flag: "+bot.obstacle,x+22,218);
   text("Distance: "+bot.distance+" cm    Target: "+bot.targetDetected,x+22,246);
   text("Heading: "+nf(bot.heading,1,1)+"°    Motor: "+round(bot.left)+" / "+round(bot.right),x+22,274);
-  text("Control source: Main/*.ino",x+22,302);
-  text("Native controller: "+(bot.controllerProcess!=null && bot.controllerProcess.isAlive()?"running":"offline"),x+22,330);
+  text("Facing: "+facingName(bot.headingDelta)+"    Delta: "+(bot.headingDelta>=0?nf(bot.headingDelta,1,1)+"°":"NA"),x+22,302);
+  String controllerStatus=bot.fallbackController?"fallback":"Main.ino";
+  text("Controller: "+controllerStatus+" / "+(bot.fallbackController?"active":bot.controllerProcess!=null && bot.controllerProcess.isAlive()?"running":"offline"),x+22,330);
   text("Match time: "+nf(bot.matchTime,1,1)+" s",x+22,358);
   text("Score RED "+scoreRed+"     BLUE "+scoreBlue,x+22,386);
   fill(245,218,120); text("Controls",x+22,427); fill(225);
-  text("B / click: button (3 presses starts)",x+22,455);
+  text("B / click: color, compass, start (3 presses)",x+22,455);
   text("S: START command     X: STOP command",x+22,481);
   text("Space: pause     R: reset layout",x+22,507);
   text("+ / -: speed x"+nf(simSpeed,1,2)+"     V: sensor ray",x+22,533);
   text("1: black test   2: red test   3: blue test",x+22,559);
   text("Right-drag: move map; view fixed opposite",x+22,585);
-  text("Blue Robot 1 start: lower-right",x+22,619);
-  text("10 flat cups + 1 hilltop cup (3 pts)",x+22,645);
+  text("Map North: blue line toward field center",x+22,619);
+  text("Blue start: lower-right; 11 cups total",x+22,645);
   text("Hill: 15 cm high, 71 x 70 cm elliptical base",x+22,671);
-  text("Main.ino control; approximate 3D physics.",x+22,697);
+  text(bot.fallbackController?"Approximate fallback control; 3D physics.":"Main.ino control; approximate 3D physics.",x+22,697);
   if(controllerBuildError.length()>0) { fill(255,150,130); textSize(11); text(controllerBuildError,x+22,715,320,34); }
-  hint(ENABLE_DEPTH_TEST);
+}
+
+void drawStateBanner() {
+  String label="STATE: "+name(bot.state);
+  pushStyle(); textSize(22);
+  float boxWidth=max(190,textWidth(label)+32);
+  noStroke(); fill(18,30,42); rect(width-boxWidth-20,18,boxWidth,48,8);
+  fill(255); textAlign(CENTER,CENTER);
+  text(label,width-boxWidth/2-20,42);
+  popStyle();
 }
 
 void keyPressed() {
@@ -423,3 +576,10 @@ boolean isOpponentColor(int c) { return (teamColor==FLOOR_BLUE&&c==FLOOR_RED)||(
 String floorName(int f) { if(f==FLOOR_BLACK)return "BLACK"; if(f==FLOOR_RED)return "RED"; if(f==FLOOR_BLUE)return "BLUE"; return "UNKNOWN"; }
 String name(int s) { if(s==STOP)return "STOP"; if(s==SEARCH)return "SEARCH"; if(s==APPROACH)return "APPROACH"; if(s==AVOID)return "AVOID"; if(s==CARRY)return "CARRY"; if(s==GOAL)return "GOAL"; return "?"; }
 float wrap360(float a) { while(a<0)a+=360; while(a>=360)a-=360; return a; }
+String facingName(float heading) {
+  if(heading<0) return "Unknown";
+  if(heading>=315||heading<45) return "North";
+  if(heading<135) return "East";
+  if(heading<225) return "South";
+  return "West";
+}
