@@ -4,6 +4,7 @@
 static bool carryTurnFinished = false;
 static unsigned long goalSequenceStartTime = 0;
 static uint8_t goalSequencePhase = 0; // 0:後退開始、1:180度旋回
+static float goalReturnHeadingDeg = -1.0f;
 
 // 左右モーターの出力値を更新する。
 void drive(int leftSpeed, int rightSpeed) {
@@ -34,6 +35,7 @@ void rotateInPlace(int speed) {
 // カップ運搬開始時の状態を初期化する。
 void resetCarryMotion() {
   carryTurnFinished = false;
+  goalReturnHeadingDeg = -1.0f;
 }
 
 // 自チーム色を3回連続で検出したらゴールと判定する。
@@ -48,6 +50,7 @@ bool detectGoal() {
 
   if (ownColorSamples >= 3) {
     ownColorSamples = 0;
+    goalReturnHeadingDeg = readHeadingDeg();
     return true;
   }
   return false;
@@ -64,7 +67,6 @@ void carryToGoal() {
     stopMotors();
     sensors.targetDetected = false;
     goalSequencePhase = 0;
-    resetCarryMotion();
     state = GOAL;
     return;
   }
@@ -80,7 +82,7 @@ void carryToGoal() {
   moveForward(FORWARD_SPEED);
 }
 
-// 青色ゴール検出後、2秒後退して開始方向へ180度向き直し、探索を再開する。
+// 自チーム色検出後、2秒後退してゴール進入時と反対を向き、探索を再開する。
 void checkGoal() {
   if (goalSequencePhase == 0) {
     moveBackward(BACKWARD_SPEED);
@@ -98,8 +100,14 @@ void checkGoal() {
     goalSequencePhase = 2;
   }
 
-  if (goalSequencePhase == 2 && !turnToHeading(SOUTH_HEADING_DEG)) {
-    return;
+  if (goalSequencePhase == 2) {
+    if (goalReturnHeadingDeg < 0.0f) {
+      stopMotors();
+      return;
+    }
+    float oppositeHeadingDeg = goalReturnHeadingDeg + 180.0f;
+    if (oppositeHeadingDeg >= 360.0f) oppositeHeadingDeg -= 360.0f;
+    if (!turnToHeading(oppositeHeadingDeg)) return;
   }
 
   stopMotors();

@@ -107,14 +107,14 @@ void avoidObstacle() {
       return;
     }
 
-    // 黒ライン上は180度方向を保つよう、方位誤差をP補正して前進する。
+    // 黒ライン上も運搬目標方位を保つよう、方位誤差をP補正して前進する。
     const float currentHeading = readHeadingDeg();
     if (currentHeading < 0.0f) {
       moveForward(FORWARD_SPEED);
       return;
     }
 
-    float error = SOUTH_HEADING_DEG - currentHeading;
+    float error = CARRY_GOAL_HEADING_DEG - currentHeading;
     while (error > 180.0f) error -= 360.0f;
     while (error < -180.0f) error += 360.0f;
 
