@@ -48,12 +48,13 @@ const int TARGET_DETECTION_RANGE_CM = 40; // 0～100cm内の物体だけカッ�
 const int FORWARD_SPEED = 200; // 前進速度
 const int ROTATE_SPEED = 160; // 方位旋回速度を少し上げる
 const unsigned long ROTATE_180_TIME_MS = 2000; // 180度回転時間の初期値。実機で調整
-// 起動時の向きを北(0°)とする相対方位。東=90°、南=180°、西=270°。
+// 基準方位を記録するときはロボットをコース北へ向ける。以後は北=0°の相対方位。
+// 東=90°、南=180°、西=270°。
 const float NORTH_HEADING_DEG = 0.0f;
 const float EAST_HEADING_DEG = 90.0f;
 const float SOUTH_HEADING_DEG = 180.0f;
 const float WEST_HEADING_DEG = 270.0f;
-const float CARRY_GOAL_HEADING_DEG = SOUTH_HEADING_DEG; // NORTH/EAST/SOUTH/WEST_HEADING_DEGから選択
+const float CARRY_GOAL_HEADING_DEG = SOUTH_HEADING_DEG; // ゴール方向はこの1行で選択
 const float HEADING_TOLERANCE_DEG = 8.0f; // 1回の方位読み取りで旋回完了とする許容誤差
 const unsigned long SWEEP_150_TIME_MS =
     ROTATE_180_TIME_MS * 150UL / 180UL; // 約150度旋回する時間

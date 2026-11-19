@@ -99,10 +99,12 @@ void checkButton() {
       stopMotors();
       motors.setSpeeds(0, 0);
       const bool calibrated = calibrateCompass();
-      startupStage = 2; // 校正が不完全なら3回目に生値方位へフォールバック
-      Serial1.println(calibrated
-                          ? "ID=1,STATUS=COMPASS_CALIBRATED"
-                          : "ID=1,STATUS=COMPASS_CAL_FALLBACK");
+      if (calibrated) startupStage = 2;
+      const char* status = calibrated
+                               ? "ID=1,STATUS=COMPASS_CALIBRATED"
+                               : "ID=1,STATUS=COMPASS_CAL_FAILED";
+      Serial.println(status);
+      Serial1.println(status);
       buttonWasPressed = button.isPressed();
       return;
     }
@@ -211,11 +213,28 @@ const char* stateName() {
   }
 }
 
-// ロボットID・状態・距離を200ms間隔でSerial1へ送る。
+static const char* facingName(float headingDeg) {
+  if (headingDeg < 0.0f) return "Unknown";
+  if (headingDeg >= 315.0f || headingDeg < 45.0f) return "North";
+  if (headingDeg < 135.0f) return "East";
+  if (headingDeg < 225.0f) return "South";
+  return "West";
+}
+
+// 方位をUSBシリアルへ、ロボットの状態・距離・RGBをSerial1へ200ms間隔で送る。
 void sendStatus() {
   static unsigned long lastSendTime = 0;
   if (millis() - lastSendTime < 200) return;
   lastSendTime = millis();
+  const float headingDeg = readHeadingDeg();
+
+  Serial.print("ID=");
+  Serial.print(ROBOT_ID);
+  Serial.print(",FACING=");
+  Serial.print(facingName(headingDeg));
+  Serial.print(",DELTA_DEG=");
+  if (headingDeg < 0.0f) Serial.println("NA");
+  else Serial.println(headingDeg);
 
   Serial1.print("ID=");
   Serial1.print(ROBOT_ID);
@@ -223,7 +242,6 @@ void sendStatus() {
   Serial1.print(hillMissionActive ? "CLIMB" : stateName());
   Serial1.print(",DIST=");
   Serial1.println(sensors.distanceCm);
-  // カラーセンサーのRGB値を送信
   Serial1.print(",R=");
   Serial1.print(sensors.colorRed);
   Serial1.print(",G=");
