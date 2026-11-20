@@ -7,6 +7,8 @@
 // 地磁気センサによる方位制御の基礎処理。
 // 山登りと山上のカップ回収動作はここでは未実装。
 // 現在はセンサ校正、方位取得、指定方位への旋回だけを提供する仮の基盤。（統合して欲しい個所）
+// 校正が10秒以内に成功しなかった場合は、旋回時間から方位を推定する固定方位モードで同じ関数群を使う。
+// 固定方位モードの旋回時間はロボット別の固定値（RobotConfig.hのFIXED_ROTATE_180_TIME_MS）。
 extern ZumoMotors motors;
 static LSM303 compass;
 static bool compassReady = false;
@@ -15,6 +17,16 @@ static bool headingReferenceCaptured = false;
 static float headingReferenceDeg = 0.0f;
 static int16_t magMinX, magMinY, magMaxX, magMaxY;
 static int rotationHeadingSign = 1;
+
+// 固定方位モード（校正失敗時）の状態。
+// 磁気センサを使わず、基準を記録した向きを北=0°として旋回時間から現在方位を推定する。
+// ロボットの旋回はturnToHeading()だけが行うため、その旋回時間を積算すれば方位を追跡できる。
+// 右回り（rotateInPlace）を方位増加方向とする（東=90°が北の右側）。
+static bool fixedHeadingMode = false;
+static float fixedHeadingDeg = 0.0f;       // 推定した現在方位（0～360度）
+static bool fixedTurning = false;          // 前回の呼び出しで旋回指令を出したか
+static int fixedTurnDir = 1;               // 前回の旋回方向（+1:右回り、-1:左回り）
+static unsigned long fixedLastTurnMs = 0;  // 前回の旋回指令の時刻
 
 // 地磁気センサを初期化し、初期校正前の状態にする。
 void setupCompass() {
@@ -38,9 +50,13 @@ bool calibrateCompass() {
   float previousAngle = 0.0f;
   float accumulatedTurn = 0.0f;
   bool havePreviousAngle = false;
-  // 校正中はメインループを離れて回転しながら200回サンプリングする。
+  // 校正中はメインループを離れて回転しながらサンプリングする。
+  // 最低COMPASS_CAL_MIN_SAMPLES回取り、XY各軸の変化幅がCOMPASS_CAL_MIN_RANGE以上になれば成功。
+  // CALIBRATION_TIMEOUT_MS(10秒)以内に成功しなければ失敗とする。
   motors.setSpeeds(200, -200);
-  for (uint8_t i = 0; i < 200; ++i) {
+  uint16_t samples = 0;
+  const unsigned long calStart = millis();
+  while (millis() - calStart < CALIBRATION_TIMEOUT_MS) {
     compass.read();
     Serial1.print("ID=1,MAG_X=");
     Serial1.print(compass.m.x);
@@ -57,7 +73,13 @@ bool calibrateCompass() {
     }
     previousAngle = angle;
     havePreviousAngle = true;
+    ++samples;
     delay(30);
+    if (samples >= COMPASS_CAL_MIN_SAMPLES &&
+        ((int32_t)maxX - minX) >= COMPASS_CAL_MIN_RANGE &&
+        ((int32_t)maxY - minY) >= COMPASS_CAL_MIN_RANGE) {
+      break;
+    }
   }
   motors.setSpeeds(0, 0);
   motorL = motorR = 0;
@@ -66,8 +88,9 @@ bool calibrateCompass() {
   const int32_t rangeY = (int32_t)maxY - minY;
   Serial1.print("ID=1,CAL_X="); Serial1.print(rangeX);
   Serial1.print(",CAL_Y="); Serial1.println(rangeY);
-  // 旋回中に各軸が一度も変化しなければ校正できないため、再試行する。
-  if (rangeX == 0 || rangeY == 0) {
+  // 10秒以内に十分な変化幅が得られなければ校正失敗。falseを返し、呼び出し側が
+  // 固定方位モードへ切り替える。
+  if (rangeX < COMPASS_CAL_MIN_RANGE || rangeY < COMPASS_CAL_MIN_RANGE) {
     return false;
   }
   magMinX = minX; magMaxX = maxX;
@@ -119,8 +142,28 @@ static float readAbsoluteHeading() {
   return angle; // 絶対方位を返す
 }
 
+// 校正失敗時に、磁気センサを使わず旋回時間で方位を推定する固定方位モードへ切り替える。
+void enableFixedHeadingMode() {
+  fixedHeadingMode = true;
+  compassCalibrated = false;
+  headingReferenceCaptured = false;
+  rotationHeadingSign = 1; // 右回り(rotateInPlace)で方位が増える
+  fixedHeadingDeg = NORTH_HEADING_DEG;
+  fixedTurning = false;
+}
+
+// 固定方位モード（磁気センサ不使用）かを返す。
+bool isFixedHeadingMode() { return fixedHeadingMode; }
+
 // 起動時の向きを相対方位0度として記録する。
 bool captureHeadingReference() {
+  if (fixedHeadingMode) {
+    // 固定方位モードでは、今ロボットが向いている方向を北(0°)とみなす。
+    fixedHeadingDeg = NORTH_HEADING_DEG;
+    fixedTurning = false;
+    headingReferenceCaptured = true;
+    return true;
+  }
   if (!compassReady || !compassCalibrated) return false; // 校正前は基準方位を記録しない
   const float angle = readAbsoluteHeading(); // 絶対方位を読み取る
   if (angle < 0.0f) return false; // 読み取り失敗の場合は失敗
@@ -135,6 +178,8 @@ bool compassIsReady() { return compassReady; }
 
 // 起動時に記録した向きを基準に、現在の方位を0～360度で返す。
 float readHeadingDeg() {
+  // 固定方位モードでは旋回時間から推定した方位を返す。
+  if (fixedHeadingMode) return headingReferenceCaptured ? fixedHeadingDeg : -1.0f;
   if (!compassReady || !compassCalibrated || !headingReferenceCaptured) return -1.0f;
   const float absoluteAngle = readAbsoluteHeading(); // 絶対方位を読み取る
   if (absoluteAngle < 0.0f) return -1.0f; // 読み取り失敗の場合は無効
@@ -148,8 +193,50 @@ int getHeadingRotationSign() {
   return rotationHeadingSign;
 }
 
+// 固定方位モード用の旋回。旋回時間から推定した方位と目標の差で、旋回方向と完了を判定する。
+static bool turnToHeadingFixed(float targetDeg, float toleranceDeg) {
+  if (!headingReferenceCaptured) {
+    // 基準方位（北）を記録する前は旋回しない
+    stopMotors();
+    return false;
+  }
+
+  const unsigned long now = millis();
+  // 前回の旋回指令で回った分を推定方位へ反映する。
+  // 指令の間隔が空きすぎた場合は別の動作を挟んだ（中断された）とみなして加算しない。
+  if (fixedTurning && now - fixedLastTurnMs <= FIXED_HEADING_MAX_STEP_MS) {
+    fixedHeadingDeg += fixedTurnDir * FIXED_HEADING_DEG_PER_MS * (float)(now - fixedLastTurnMs);
+    while (fixedHeadingDeg < 0.0f) fixedHeadingDeg += 360.0f;
+    while (fixedHeadingDeg >= 360.0f) fixedHeadingDeg -= 360.0f;
+  }
+  fixedLastTurnMs = now;
+
+  float error = targetDeg - fixedHeadingDeg;
+  while (error > 180.0f) error -= 360.0f;
+  while (error < -180.0f) error += 360.0f;
+
+  // 推定方位にはセンサ誤差がないため、許容角は呼び出し側の値と標準値の小さい方にする。
+  const float tolerance =
+      toleranceDeg < HEADING_TOLERANCE_DEG ? toleranceDeg : HEADING_TOLERANCE_DEG;
+  if (fabs(error) <= tolerance) {
+    stopMotors();
+    fixedTurning = false;
+    return true;
+  }
+
+  fixedTurnDir = error > 0.0f ? 1 : -1;
+  const int speed = ROTATE_SPEED;
+  if (fixedTurnDir > 0) rotateInPlace(speed); // 右回りで方位が増える
+  else drive(-speed, speed);
+  fixedTurning = true;
+  return false;
+}
+
 // 目標方位への最短旋回を固定速度で行い、指定した許容角内に入ったら完了する。
 bool turnToHeading(float targetDeg, float toleranceDeg) {
+  // 校正に失敗している場合は、旋回時間による固定方位モードで旋回する。
+  if (fixedHeadingMode) return turnToHeadingFixed(targetDeg, toleranceDeg);
+
   if (!compassReady) {
     // 方位センサが準備できていない場合はモーターを停止
     stopMotors();
