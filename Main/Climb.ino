@@ -4,6 +4,8 @@
 // 山登りの段階
 enum ClimbPhase {
   CLIMB_APPROACH, // 山の斜面を探す
+  CLIMB_BACKWARD, // 枠を検知した後に後退する
+  CLIMB_ROTATE,   // 後退後に回転する
   CLIMB_UP,       // 山を登る
   CLIMB_TOP,      // 山頂で停止する
   CLIMB_DOWN,     // 山を下る
@@ -20,7 +22,7 @@ static unsigned long topWaitStartTime = 0;
 static bool slopeDetected = false;
 
 // 山登り中のモーター速度
-const int CLIMB_FORWARD_SPEED = 150;
+const int CLIMB_FORWARD_SPEED = 130;
 
 // 方向補正の強さ
 const int CLIMB_STEER_DIVISOR = 40;
@@ -36,17 +38,19 @@ const int CLIMB_UP_THRESHOLD = 1200;
 const int CLIMB_DOWN_THRESHOLD = -1200;
 // 前回の前後方向の傾きを記録する
 static int previousPitchValue = 0;
-// 前後方向の傾きが急激に変化したか判定するための設定
-const int CLIMB_TOP_CHANGE_THRESHOLD = 300; // 実測値から決定する
+// 登山中に記録した最大傾斜
+static int maxPitchValue = 0;
+// 最大傾斜からどれだけ小さくなったら山頂候補とするか
+const int CLIMB_TOP_CHANGE_THRESHOLD = 200;
 
 // 平地を判定する閾値
-const int CLIMB_FLAT_THRESHOLD = 700;
+const int CLIMB_FLAT_THRESHOLD = 1200;
 
 // 判定を安定させる時間
 const unsigned long CLIMB_DETECT_TIME = 100;
 
 // 山頂で停止する時間
-const unsigned long CLIMB_TOP_WAIT_TIME = 200;
+const unsigned long CLIMB_TOP_WAIT_TIME = 500;
 
 // 山頂確認用
 static int topCheckCount = 0;
@@ -54,11 +58,43 @@ static unsigned long topCheckLastTime = 0;
 static bool uphillExperienced = false;
 
 // 山頂確認の設定
-const unsigned long CLIMB_TOP_SAMPLE_INTERVAL = 50;
-const int CLIMB_TOP_REQUIRED_SAMPLES = 8;
+const unsigned long CLIMB_TOP_SAMPLE_INTERVAL = 10;
+const int CLIMB_TOP_REQUIRED_SAMPLES = 2;
+// 山頂確認中の前進速度
+const int CLIMB_TOP_FORWARD_SPEED = 70;
+
+// 枠を検知した後の動作開始時間
+static unsigned long boundaryStartTime = 0;
+// 枠検知後、再検知を一時的に無効にする時間
+static unsigned long boundaryIgnoreUntil = 0;
+// 後退する時間
+const unsigned long CLIMB_BACKWARD_TIME = 250;
+// 回転する時間
+const unsigned long CLIMB_ROTATE_TIME = 400;
+// 後退時の速度
+const int CLIMB_BACKWARD_SPEED = 100;
+// 回転時の速度
+const int CLIMB_ROTATE_SPEED = 180;
+
+// フィールドの枠（黒・赤・青）を検知する
+bool detectBoundaryColor() {
+  // 赤を検知
+  if (identify_color(118, 54, 56)) {
+    return true;
+  }
+  // 青を検知
+  if (identify_color(39, 69, 101)) {
+    return true;
+  }
+  // 黒を検知
+  if (identify_color(29, 40, 39)) {
+    return true;
+  }
+  return false;
+}
 
 // 左右の傾きに応じて進行方向を補正する
-void climbForwardWithSteering(int rollValue) {
+void climbForwardWithSteering(int rollValue, int forwardSpeed = CLIMB_FORWARD_SPEED) {
   int steer = rollValue / CLIMB_STEER_DIVISOR;
   // 補正量を制限する
   steer = constrain(
@@ -67,8 +103,8 @@ void climbForwardWithSteering(int rollValue) {
     CLIMB_MAX_STEER
   );
   // 左右のモーター速度を調整する
-  int leftSpeed = CLIMB_FORWARD_SPEED - steer;
-  int rightSpeed = CLIMB_FORWARD_SPEED + steer;
+  int leftSpeed = forwardSpeed - steer;
+  int rightSpeed = forwardSpeed + steer;
 
   drive(leftSpeed, rightSpeed);
 }
@@ -85,8 +121,11 @@ void resetClimbMission() {
   topCheckCount = 0;
   topCheckLastTime = 0;
   uphillExperienced = false;
-
   previousPitchValue = 0;
+  maxPitchValue = 0;
+  // 枠検知用の初期化
+  boundaryStartTime = 0;
+  boundaryIgnoreUntil = 0;
 }
 
 // 山登りミッションを1周期進める
@@ -109,48 +148,77 @@ void updateClimbMission() {
   int rollValue = accelY - CLIMB_FLAT_Y;
 
   switch (climbPhase) {
-
     case CLIMB_APPROACH:
+      // 回転直後は少しの間、枠検知を無視する
+      if (millis() < boundaryIgnoreUntil) {
+        moveForward(CLIMB_FORWARD_SPEED);
+        break;
+      }
+      // 黒・赤・青を検知したら後退する
+      if (detectBoundaryColor()) {
+        detectStartTime = 0;
+        boundaryStartTime = millis();
 
+        climbPhase = CLIMB_BACKWARD;
+        break;
+      }
       // 山の斜面を探すために前進する
       moveForward(CLIMB_FORWARD_SPEED);
-
       // 前後方向の傾きが続いたら斜面に入ったと判断する
       if (pitchValue >= CLIMB_UP_THRESHOLD) {
-
         if (detectStartTime == 0) {
           detectStartTime = millis();
         }
-
         // 一定時間斜面を検出したら登山を開始する
         if (millis() - detectStartTime >= CLIMB_DETECT_TIME) {
           detectStartTime = 0;
-          // 斜面を検出したことを記録する
+          previousPitchValue = pitchValue;
+          maxPitchValue = pitchValue;
           uphillExperienced = true;
           climbPhase = CLIMB_UP;
 
           Serial1.println("ID=1,STATUS=HILL_STARTED");
         }
-
       } else {
         detectStartTime = 0;
       }
+      break;
 
+    case CLIMB_BACKWARD:
+      // 一定時間後退する
+      drive(-CLIMB_BACKWARD_SPEED, -CLIMB_BACKWARD_SPEED);
+      if (millis() - boundaryStartTime >= CLIMB_BACKWARD_TIME) {
+        boundaryStartTime = millis();
+        climbPhase = CLIMB_ROTATE;
+      }
+      break;
+
+    case CLIMB_ROTATE:
+      // その場で回転する
+      drive(CLIMB_ROTATE_SPEED, -CLIMB_ROTATE_SPEED);
+      if (millis() - boundaryStartTime >= CLIMB_ROTATE_TIME) {
+        // 坂を探す状態に戻る
+        boundaryIgnoreUntil = millis() + 300;
+        detectStartTime = 0;
+
+        climbPhase = CLIMB_APPROACH;
+      }
       break;
 
     case CLIMB_UP:{
       // 左右の傾きに応じて進行方向を補正する
       climbForwardWithSteering(rollValue);
+      // 登山中の最大傾斜を更新する
+      if (pitchValue > maxPitchValue) {
+        maxPitchValue = pitchValue;
+      }
       // 前回より前後方向の傾きが小さくなった量を計算する
-      int pitchChange = previousPitchValue - pitchValue;
+      int pitchChange = maxPitchValue - pitchValue;
       // 登山中に傾きが急激に小さくなったら山頂候補とする
       if (
         uphillExperienced &&
         pitchChange >= CLIMB_TOP_CHANGE_THRESHOLD
       ) {
-        stopMotors();
-
-        detectStartTime = 0;
         topCheckCount = 0;
         topCheckLastTime = millis();
 
@@ -162,8 +230,11 @@ void updateClimbMission() {
     }
 
     case CLIMB_TOP:
-      // 山頂候補ではモーターを停止する
-      stopMotors();
+      // 山頂確認中も停止せず、低速で前進する
+      climbForwardWithSteering(
+        rollValue,
+        CLIMB_TOP_FORWARD_SPEED
+      );
       // 一定間隔で傾きを確認する
       if (millis() - topCheckLastTime >= CLIMB_TOP_SAMPLE_INTERVAL) {
         topCheckLastTime = millis();
@@ -176,14 +247,19 @@ void updateClimbMission() {
         } else {
           // 傾きが大きくなったら山頂候補を取り消す
           topCheckCount = 0;
+          // 現在の傾きを記録して登山を再開する
+          previousPitchValue = pitchValue;
           // 登山を再開する
           climbPhase = CLIMB_UP;
         }
       }
-      // 8回連続で平坦なら山頂と判断する
+      // 2回連続で平坦なら山頂と判断する
       if (topCheckCount >= CLIMB_TOP_REQUIRED_SAMPLES) {
         stopMotors();
         Serial1.println("ID=1,STATUS=HILL_TOP");
+        // 山頂到達時にブザーを鳴らす
+        tone(3, 1000, 500);
+        delay(CLIMB_TOP_WAIT_TIME);
         // 下山開始
         slopeDetected = false;
         detectStartTime = 0;
