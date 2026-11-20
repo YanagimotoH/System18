@@ -36,6 +36,7 @@ void rotateInPlace(int speed) {
 void resetCarryMotion() {
   carryTurnFinished = false;
   goalReturnHeadingDeg = -1.0f;
+  resetCupLost();
 }
 
 // 自チーム色を3回連続で検出したらゴールと判定する。
@@ -61,12 +62,19 @@ void grabCup() {
   stopMotors();
 }
 
-// ゴール方位へ旋回し、向きが合ったらゴール検出まで直進する。
+// 走行開始時の向きを0°として、CARRY_GOAL_HEADING_DEGへ正確に旋回し、ゴール検出まで直進する。
+// カップが前方から無くなったら探索へ戻る。
 void carryToGoal() {
+  if (cupLost()) {
+    resumeSearch();
+    return;
+  }
+
   if (detectGoal()) {
     stopMotors();
     sensors.targetDetected = false;
     goalSequencePhase = 0;
+    goalSequenceStartTime = millis();
     state = GOAL;
     return;
   }
@@ -79,12 +87,32 @@ void carryToGoal() {
     return;
   }
 
+  // 前進中にゴール方位から大きくずれたら、止まってもう一度向き直す。
+  const float heading = readHeadingDeg();
+  if (heading >= 0.0f) {
+    float error = CARRY_GOAL_HEADING_DEG - heading;
+    while (error > 180.0f) error -= 360.0f;
+    while (error < -180.0f) error += 360.0f;
+    if (fabs(error) > CARRY_REALIGN_DEG) {
+      carryTurnFinished = false;
+      stopMotors();
+      return;
+    }
+  }
+
   moveForward(FORWARD_SPEED);
 }
 
 // 自チーム色検出後、2秒後退してゴール進入時と反対を向き、探索を再開する。
 void checkGoal() {
   if (goalSequencePhase == 0) {
+    // 停止してカップが前方にあるか確認する。無ければ探索へ戻る。
+    stopMotors();
+    if (cupLost()) {
+      resumeSearch();
+      return;
+    }
+    if (millis() - goalSequenceStartTime < GOAL_CONFIRM_MS) return;
     moveBackward(BACKWARD_SPEED);
     goalSequenceStartTime = millis();
     goalSequencePhase = 1;
@@ -122,6 +150,7 @@ void checkGoal() {
 // 探索状態を初期化して再開する。
 void resumeSearch() {
   stopMotors();
+  goalSequencePhase = 0;
   sensors.targetDetected = false;
   resetCarryMotion();
   resetSearchPattern();

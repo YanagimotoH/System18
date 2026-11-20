@@ -33,7 +33,29 @@ struct SensorData {
     float colorBlue;            // 色センサの青成分
 };
 
-const uint8_t ROBOT_ID = 1; // 通信で使用するロボットID
+// ---- ロボット別の設定（3台分） ----
+// 書き込むロボットに合わせて ROBOT_NUMBER を 1～3 のどれかに変更する。
+#define ROBOT_NUMBER 1
+const uint8_t ROBOT_ID = ROBOT_NUMBER; // 通信で使用するロボットID
+
+// 方位センサの校正はこの時間内に成功しなければ失敗とみなし、固定値を使う。
+const unsigned long CALIBRATION_TIMEOUT_MS = 10000UL;
+const uint16_t COMPASS_CAL_MIN_SAMPLES = 200;     // 方位校正の最低サンプル数（30ms間隔で約6秒）
+const int32_t COMPASS_CAL_MIN_RANGE = 50;         // 方位校正でXY各軸に必要な最小の変化幅。実機で調整
+
+// 校正に失敗したときに使うロボット別の固定値。
+//   FIXED_ROTATE_180_TIME_MS : ROTATE_SPEEDで180度旋回するのにかかる時間[ms]
+//                              （方位校正に失敗したときの固定方位モード、および旋回時間全般に使用）
+// ★下記の数値は仮の値。各ロボットで実測した値に置き換えること。
+#if ROBOT_NUMBER == 1
+  #define FIXED_ROTATE_180_TIME_MS 2000UL
+#elif ROBOT_NUMBER == 2
+  #define FIXED_ROTATE_180_TIME_MS 2000UL
+#elif ROBOT_NUMBER == 3
+  #define FIXED_ROTATE_180_TIME_MS 2000UL
+#else
+  #error "ROBOT_NUMBER must be 1, 2 or 3"
+#endif
 
 // 超音波センサのピン番号
 const int trig = 2; // 超音波センサのトリガーピン
@@ -45,20 +67,53 @@ const int buzzerPin = 3; // ブザーを接続するピン
 const int OBSTACLE_LIMIT_CM = 15; // 障害物と判定する距離の閾値
 const int APPROACH_LIMIT_CM = 3; // 目標に接近する距離の閾値
 const int TARGET_DETECTION_RANGE_CM = 40; // 0～100cm内の物体だけカップ候補として確認
-const int FORWARD_SPEED = 200; // 前進速度
-const int ROTATE_SPEED = 160; // 方位旋回速度を少し上げる
-const unsigned long ROTATE_180_TIME_MS = 2000; // 180度回転時間の初期値。実機で調整
+const int FORWARD_SPEED = 170; // 前進速度（探索・接近・後退・ライン脱出で共通）
+const int ROTATE_SPEED = 150; // 方位旋回速度を少し上げる
+const unsigned long ROTATE_180_TIME_MS = FIXED_ROTATE_180_TIME_MS; // 180度回転時間（ロボット別の固定値を使用）
 // 基準方位を記録するときはロボットをコース北へ向ける。以後は北=0°の相対方位。
 // 東=90°、南=180°、西=270°。
 const float NORTH_HEADING_DEG = 0.0f;
 const float EAST_HEADING_DEG = 90.0f;
 const float SOUTH_HEADING_DEG = 180.0f;
 const float WEST_HEADING_DEG = 270.0f;
-const float CARRY_GOAL_HEADING_DEG = SOUTH_HEADING_DEG; // ゴール方向はこの1行で選択
+// 運搬(CARRY)で向かうゴール方位。ここだけ変更し、上の北/東/南/西の固定値から選ぶ。
+// 地磁気センサの校正に成功した場合も、失敗して固定方位モードになった場合も同じ値を使う。
+const float CARRY_GOAL_HEADING_DEG = SOUTH_HEADING_DEG;
 const float HEADING_TOLERANCE_DEG = 8.0f; // 1回の方位読み取りで旋回完了とする許容誤差
 const unsigned long SWEEP_150_TIME_MS =
     ROTATE_180_TIME_MS * 150UL / 180UL; // 約150度旋回する時間
-const int BACKWARD_SPEED = 80; // 障害物回避時の速度
+const int BACKWARD_SPEED = FORWARD_SPEED; // 後退速度（前進速度と同じ）
+
+// ---- 地磁気センサの校正に失敗した場合の固定方位モード ----
+// 方位校正がCALIBRATION_TIMEOUT_MS(10秒)以内に成功しなければ、
+// 磁気センサを使わず、旋回時間から現在方位を推定する固定方位モードへ切り替える。
+// このモードでは、基準方位を記録した向きを北(0°)とみなし、上の北/東/南/西の固定値と
+// CARRY_GOAL_HEADING_DEG をそのまま使う。旋回量はROTATE_180_TIME_MSから換算するため、
+// 実機でROTATE_SPEEDでの180度旋回時間を合わせておくこと。
+const float FIXED_HEADING_DEG_PER_MS =
+    180.0f / ROTATE_180_TIME_MS; // 旋回速度[度/ms]。ROTATE_180_TIME_MSから算出
+const unsigned long FIXED_HEADING_MAX_STEP_MS = 300UL; // これ以上空いた旋回指令は中断とみなし加算しない
+void enableFixedHeadingMode(); // 校正失敗時に、旋回時間で方位を推定する固定方位モードへ切り替える
+bool isFixedHeadingMode(); // 固定方位モード（磁気センサ不使用）かを返す
+void fixedHeadingOnDrive(); // 固定方位モードで旋回が中断された分を方位推定へ反映する（drive()から呼ぶ）
+
+// ---- ライン接触時の回避 ----
+// 黒・赤・青のラインを踏んだら、AVOID_BACK_MS 後退してから180度旋回し、状態ごとの続きへ戻る。
+// （自チーム色のゴールは対象外。将来のライントレース追加を考え、動作は単純にしてある）
+const unsigned long AVOID_BACK_MS = 1000UL; // ライン検出後の後退時間
+const unsigned long AVOID_TURN_TIMEOUT_MS = ROTATE_180_TIME_MS * 2UL; // 180度旋回の上限時間
+// 例外処理: 回避(AVOID)がこの時間を超えたら、状態に関わらず強制的に探索(SEARCH)へ抜ける。
+const unsigned long AVOID_MAX_MS = AVOID_BACK_MS + AVOID_TURN_TIMEOUT_MS + 500UL;
+// 回避が終わってからAVOID_REENTRY_MS以内に再びラインを踏むことがAVOID_REENTRY_MAX回続いたら、
+// 回避後は運搬・ゴール処理の続きに戻らず探索(SEARCH)へ抜ける（同じラインでの無限ループ防止）。
+const unsigned long AVOID_REENTRY_MS = 3000UL;
+const uint8_t AVOID_REENTRY_MAX = 3;
+
+// ---- 探索 ----
+// 360度回転して確認した後、探索の前進方向を中心に左右この角度の範囲でランダムな向きへ前進する。
+const int SEARCH_FORWARD_SPREAD_DEG = 30;
+bool isLineContact(RobotState s); // 状態sでラインを踏んだとみなす床色かを返す
+void beginAvoid(RobotState from); // ライン接触の回避を開始する（回避後はfromの続きへ戻る）
 
 extern RobotState state; // 現在のロボットの状態
 extern SensorData sensors; // センサーのデータ
@@ -116,7 +171,14 @@ void resumeSearch(); // 運搬後に探索状態へ戻す
 void sendStatus(); // ロボットID、状態、距離をシリアル送信する
 void receiveCommand(); // シリアルからSTART/STOPコマンドを受信する
 
-const float CARRY_HEADING_TOLERANCE_DEG = 35.0f; // ゴール方位の35°以内に入ったら前進
+// 運搬: 走行開始時の向きを0°として、CARRY_GOAL_HEADING_DEGへ正確に向いてから前進する。
+const float CARRY_HEADING_TOLERANCE_DEG = HEADING_TOLERANCE_DEG; // 旋回完了とみなす許容誤差
+const float CARRY_REALIGN_DEG = 20.0f; // 前進中にゴール方位からこれ以上ずれたら止まって向き直す
+// カップが前方(APPROACH_LIMIT_CM以内)にない状態がこの回数続いたら、カップを見失ったとみなして探索へ戻る。
+const uint8_t CUP_LOST_SAMPLES = 5;
+const unsigned long GOAL_CONFIRM_MS = 300UL; // ゴール検出後、停止してカップがあることを確認する時間
+bool cupLost(); // 前方にカップがない状態が続いたか（運搬・ゴール処理中の判定）
+void resetCupLost(); // カップ見失い判定のカウントを初期化する
 
 // 以下山登り関係
 void readAccelXY(int &x, int &y); // 加速度センサーのX,Y軸の値を取得する

@@ -98,11 +98,14 @@ void checkButton() {
     if (startupStage == 1) {
       stopMotors();
       motors.setSpeeds(0, 0);
+      // 方位校正は10秒以内に成功しなければ失敗とし、磁気センサを使わず旋回時間で
+      // 方位を推定する固定方位モードへ切り替える（ロボット別の固定値を使用）。
       const bool calibrated = calibrateCompass();
-      if (calibrated) startupStage = 2;
+      if (!calibrated) enableFixedHeadingMode();
+      startupStage = 2;
       const char* status = calibrated
                                ? "ID=1,STATUS=COMPASS_CALIBRATED"
-                               : "ID=1,STATUS=COMPASS_CAL_FAILED";
+                               : "ID=1,STATUS=COMPASS_FIXED_MODE";
       Serial.println(status);
       Serial1.println(status);
       buttonWasPressed = button.isPressed();
@@ -178,7 +181,10 @@ void receiveCommand() {
         }
 
       if (command == "START") {
-        if (startupStage >= 2 && captureHeadingReference()) {
+        if (robotEnabled) {
+          // 走行中にSTARTを受けても基準方位(北=0°)を取り直さない。
+          Serial1.println("ID=1,STATUS=ALREADY_RUNNING");
+        } else if (startupStage >= 2 && captureHeadingReference()) {
           robotEnabled = true;
           state = SEARCH;
           resetSearchPattern();
@@ -266,9 +272,6 @@ void setup() {
 // メインループ
 // 入力処理 → センサー取得 → 山登り判定 → 通常動作
 void loop() {
-    // 黒ラインなどに接触したとき、同じ場所で
-    // 回避処理が何度も開始されるのを防ぐ
-    static bool lineAvoidLatched = false;
     // ボタンとProcessingからの命令を処理
     checkButton();
     receiveCommand();
@@ -286,7 +289,6 @@ void loop() {
     // ロボットが停止中の場合
     if (!robotEnabled) {
         state = STOP;
-        lineAvoidLatched = false;
         stopMotors();
         motors.setSpeeds(motorL, motorR);
         sendStatus();
@@ -313,8 +315,8 @@ void loop() {
         return;
     }
     // 通常探索時の対象物検出
-    if (state == SEARCH) {
-        // コップなどの対象物を検出
+    if (state == SEARCH || state == APPROACH) {
+        // コップなどの対象物を検出（接近中も見失ったかを毎周期確認する）
         sensors.targetDetected = detectTarget();
     }
     // 対象物が検出されていれば距離を取得
@@ -326,20 +328,12 @@ void loop() {
     if (sensors.goalDetected && sensors.floorColor != MY_TEAM_COLOR) {
         sensors.goalDetected = false;
     }
-    // 黒い外周や相手色に接触した場合は回避する。
-    // 自チーム色はSEARCH中のみライン離脱に使用する。
-    if (state != STOP && state != GOAL &&
-        (sensors.floorColor == FLOOR_BLACK || isOpponentColor(sensors.floorColor) ||
-         (state == SEARCH && sensors.floorColor == MY_TEAM_COLOR && !sensors.goalDetected))) {
-        // まだ回避処理を開始していない場合
-        if (!lineAvoidLatched) {
-            lineAvoidLatched = true;
-            // 回避状態へ変更
-            state = AVOID;
-        }
-    } else {
-        // ラインから離れたら次の接触を検出可能にする
-        lineAvoidLatched = false;
+    // 黒・赤・青のラインを踏んだら、どの状態でも回避(後退)に入る。
+    // 状態ごとにラインとみなす色はisLineContact()で決める。
+    // 回避中はavoidObstacle()が「ラインを抜けるまで」後退するので、
+    // 後退後もライン上なら次の周期でまた回避に入り、通り抜けない。
+    if (state != STOP && state != AVOID && isLineContact(state)) {
+        beginAvoid(state);
     }
     // 通常動作の実行
     switch (state) {
