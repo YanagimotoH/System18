@@ -35,7 +35,7 @@ struct SensorData {
 
 // ---- ロボット別の設定（3台分） ----
 // 書き込むロボットに合わせて ROBOT_NUMBER を 1～3 のどれかに変更する。
-#define ROBOT_NUMBER 1
+#define ROBOT_NUMBER 3
 const uint8_t ROBOT_ID = ROBOT_NUMBER; // 通信で使用するロボットID
 
 // 方位センサの校正はこの時間内に成功しなければ失敗とみなし、固定値を使う。
@@ -78,7 +78,13 @@ const float SOUTH_HEADING_DEG = 180.0f;
 const float WEST_HEADING_DEG = 270.0f;
 // 運搬(CARRY)で向かうゴール方位。ここだけ変更し、上の北/東/南/西の固定値から選ぶ。
 // 地磁気センサの校正に成功した場合も、失敗して固定方位モードになった場合も同じ値を使う。
-const float CARRY_GOAL_HEADING_DEG = SOUTH_HEADING_DEG;
+#if ROBOT_NUMBER == 1
+const float CARRY_GOAL_HEADING_DEG = EAST_HEADING_DEG;  // 東 90°
+#elif ROBOT_NUMBER == 2
+const float CARRY_GOAL_HEADING_DEG = WEST_HEADING_DEG;  // 西 270°
+#elif ROBOT_NUMBER == 3
+const float CARRY_GOAL_HEADING_DEG = SOUTH_HEADING_DEG; // 南 180°
+#endif
 const float HEADING_TOLERANCE_DEG = 8.0f; // 1回の方位読み取りで旋回完了とする許容誤差
 const unsigned long SWEEP_150_TIME_MS =
     ROTATE_180_TIME_MS * 150UL / 180UL; // 約150度旋回する時間

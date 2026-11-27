@@ -57,11 +57,6 @@ bool detectGoal() {
   return false;
 }
 
-// カップ保持機構は未実装のため、現在は停止だけ行う。
-void grabCup() {
-  stopMotors();
-}
-
 // 走行開始時の向きを0°として、CARRY_GOAL_HEADING_DEGへ正確に旋回し、ゴール検出まで直進する。
 // カップが前方から無くなったら探索へ戻る。
 void carryToGoal() {

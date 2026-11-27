@@ -101,6 +101,7 @@ void checkButton() {
       // 方位校正は10秒以内に成功しなければ失敗とし、磁気センサを使わず旋回時間で
       // 方位を推定する固定方位モードへ切り替える（ロボット別の固定値を使用）。
       const bool calibrated = calibrateCompass();
+      //const bool calibrated = false;
       if (!calibrated) enableFixedHeadingMode();
       startupStage = 2;
       const char* status = calibrated
