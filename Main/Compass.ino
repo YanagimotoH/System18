@@ -31,14 +31,37 @@ static unsigned long fixedLastTurnMs = 0;  // 前回の旋回指令の時刻
 // 地磁気センサを初期化し、初期校正前の状態にする。
 void setupCompass() {
   Wire.begin();
-  compass.init();
+
+  // センサーを初期化する。
+  bool initSuccess = compass.init();
+  Serial1.print("ID=1,DEVICE=");
+  Serial1.println((int)compass.getDeviceType());
+
+  // 初期化に失敗した場合
+  if (!initSuccess) {
+    compassReady = false;
+    compassCalibrated = false;
+
+    Serial1.println("ID=1,IMU_INIT=FAILED");
+    return;
+  }
+
+  // センサーの初期設定を行う。
   compass.enableDefault();
-  compass.writeReg(LSM303::CRB_REG_M, 0x60); // +/-2.5 gauss
-  compass.writeReg(LSM303::CRA_REG_M, 0x1C); // 220 Hz
+  compass.writeReg(LSM303::CRB_REG_M, 0x60);
+  compass.writeReg(LSM303::CRA_REG_M, 0x1C);
+
+  // 読み取りが一定時間以上かかった場合にタイムアウトさせる。
+  compass.setTimeout(100);
+
   delay(1000);
+
   compassReady = true;
   compassCalibrated = false;
-  headingReferenceCaptured = false;
+
+  // 認識したセンサーの種類も送信する。
+  Serial1.print("ID=1,IMU_INIT=OK,DEVICE=");
+  Serial1.println((int)compass.getDeviceType());
 }
 
 // 色センサ準備の後に実施し、回転中に磁気値の範囲を校正する。
