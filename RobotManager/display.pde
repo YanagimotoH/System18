@@ -66,6 +66,15 @@ void drawZumo(int id, float x, float y) {
   stroke(255);
   rectMode(CORNER);
   rect(x + pw - 65, y + 48, 40, 25);
+  
+  // 現在の方角を表示する
+  fill(255);
+  textAlign(RIGHT, TOP);
+  textSize(14);
+  text("方角: " + facing[id], x + pw - 25, y + 85);
+
+  // 基準方位からの角度差を表示する
+  text("角度差: " + nf(deltaDeg[id], 1, 1) + "°", x + pw - 25, y + 110);
 
   // ロボットの車体と進行方向を表示する
   // pitchの値に応じて車体の向きを変える
