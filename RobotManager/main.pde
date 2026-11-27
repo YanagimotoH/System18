@@ -51,6 +51,11 @@ String[] robotState = {"STOP", "STOP", "STOP"};
 // -1は距離データを受信していない状態を表す
 int[] distanceCm = {-1, -1, -1};
 
+// 現在向いている方角
+String[] facing = {"Unknown", "Unknown", "Unknown"};
+// 基準方位からの角度差
+float[] deltaDeg = new float[3];
+
 // 受信時刻を記録する変数
 // 最後にデータを受信した時刻をロボットごとに保存する
 int[] lastReceiveTime = new int[3];
