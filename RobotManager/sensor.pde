@@ -137,4 +137,5 @@ void readSensorData(int id) {
    received[id] = true;
    // 最後にデータを受信した時刻を記録する
    lastReceiveTime[id] = millis();
+  }
 }
