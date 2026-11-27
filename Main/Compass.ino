@@ -28,15 +28,35 @@ static bool fixedTurning = false;          // 前回の呼び出しで旋回指�
 static int fixedTurnDir = 1;               // 前回の旋回方向（+1:右回り、-1:左回り）
 static unsigned long fixedLastTurnMs = 0;  // 前回の旋回指令の時刻
 
-// 地磁気センサを初期化し、初期校正前の状態にする。
-void setupCompass() {
+static unsigned long lastCompassInitMs = 0;
+static uint8_t accelFailures = 0;
+static const char* accelError = "NOT_FOUND";
+
+// 共有I2Cバスとセンサの設定だけを復旧し、走行開始時の基準方位と校正値は保持する。
+void initCompassHardware() {
+  lastCompassInitMs = millis();
+  accelFailures = 0;
   Wire.begin();
-  compass.init();
-  compass.enableDefault();
-  compass.writeReg(LSM303::CRB_REG_M, 0x60); // +/-2.5 gauss
-  compass.writeReg(LSM303::CRA_REG_M, 0x1C); // 220 Hz
+  compass.setTimeout(30);
+  compassReady = compass.init();
+  if (!compassReady) {
+    accelError = "NOT_FOUND";
+    return;
+  }
+
+  compass.enableDefault(); // 加速度は全軸50 Hz。LSM303Dには専用の磁気レジスタ設定も含む。
+  if (compass.last_status == 0 && compass.getDeviceType() != LSM303::device_D) {
+    compass.writeMagReg(LSM303::CRB_REG_M, 0x60); // +/-2.5 gauss
+    if (compass.last_status == 0) compass.writeMagReg(LSM303::CRA_REG_M, 0x1C); // 220 Hz
+  }
+  compassReady = compass.last_status == 0;
+  if (!compassReady) accelError = "I2C";
+  else delay(20); // 有効化後、最初の加速度変換を待つ
+}
+
+void setupCompass() {
+  initCompassHardware();
   delay(1000);
-  compassReady = true;
   compassCalibrated = false;
   headingReferenceCaptured = false;
 }
@@ -45,6 +65,7 @@ void setupCompass() {
 bool calibrateCompass() {
   compassCalibrated = false;
   headingReferenceCaptured = false;
+  if (!compassReady) return false;
   int16_t minX = 32767, minY = 32767;
   int16_t maxX = -32768, maxY = -32768;
   float previousAngle = 0.0f;
@@ -57,7 +78,7 @@ bool calibrateCompass() {
   uint16_t samples = 0;
   const unsigned long calStart = millis();
   while (millis() - calStart < CALIBRATION_TIMEOUT_MS) {
-    compass.read();
+    compass.readMag();
     Serial1.print("ID=1,MAG_X=");
     Serial1.print(compass.m.x);
     Serial1.print(",MAG_Y=");
@@ -123,7 +144,7 @@ bool calibrateCompass() {
 static float readAbsoluteHeading() {
   int32_t x = 0, y = 0;
   for (uint8_t i = 0; i < 5; ++i) {
-    compass.read(); // 地磁気センサの値読み取り
+    compass.readMag(); // 方位計算では磁気だけを読む
     x += compass.m.x; // X軸の値を加算
     y += compass.m.y; // Y軸の値を加算
   }
@@ -263,30 +284,38 @@ bool turnToHeading(float targetDeg, float toleranceDeg) {
   return false;
 }
 
-// 山登り用
-// 加速度センサーのX軸とY軸を同時に読み取る
-void readAccelXY(int &x, int &y) {
-  compass.readAcc();
+// 山登りと通信で同じ読み取り判定を使う。失敗時には前回の値を返さない。
+bool readAccelXY(int &x, int &y) {
+  if (!compassReady && millis() - lastCompassInitMs >= 1000UL) initCompassHardware();
+  if (!compassReady) return false;
 
-  x = compass.a.x;
-  y = compass.a.y;
+  compass.timeoutOccurred();
+  compass.readAcc();
+  const bool timedOut = compass.timeoutOccurred();
+  if (compass.last_status != 0) accelError = "I2C";
+  else if (timedOut) accelError = "TIMEOUT";
+  else if (compass.a.x <= -32760 || compass.a.x >= 32760) accelError = "RANGE";
+  else {
+    x = compass.a.x;
+    y = compass.a.y;
+    accelFailures = 0;
+    return true;
+  }
+
+  if (++accelFailures >= 3) compassReady = false;
+  return false;
 }
-// 加速度センサーのX軸・Y軸・Z軸を読み取り、診断情報を送信する。
+
 void sendAccelDebug() {
-  compass.readAcc();
-
-  Serial1.print("ID=1,ACC_X=");
-  Serial1.print(compass.a.x);
-
-  Serial1.print(",ACC_Y=");
-  Serial1.print(compass.a.y);
-
-  Serial1.print(",ACC_Z=");
-  Serial1.print(compass.a.z);
-
-  Serial1.print(",I2C_STATUS=");
-  Serial1.print(compass.last_status);
-
-  Serial1.print(",TIMEOUT=");
-  Serial1.println(compass.timeoutOccurred() ? 1 : 0);
+  int ax, ay;
+  const bool valid = readAccelXY(ax, ay);
+  Serial1.print("ID=");
+  Serial1.print(ROBOT_ID);
+  if (valid) {
+    Serial1.print(",ACC_X=");
+    Serial1.println(ax);
+  } else {
+    Serial1.print(",AX_ERR=");
+    Serial1.println(accelError);
+  }
 }

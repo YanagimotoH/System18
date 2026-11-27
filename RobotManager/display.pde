@@ -86,10 +86,17 @@ void drawZumo(int id, float x, float y) {
   textSize(15);
 
   // 前後方向の傾き
-  text("PITCH: " + nf(pitch[id], 1, 1) + " deg", x + 20, y + ph - 35);
+  boolean hasAx = !Float.isNaN(ax[id]);
+  text("PITCH: " + (hasAx ? nf(pitch[id], 1, 1) + " deg" : "--"), x + 20, y + ph - 35);
 
-  // 左右方向の傾き
-  //text("ROLL: " + nf(roll[id], 1, 1) + " deg", x + 20, y + ph - 12);
+  if (!axError[id].isEmpty()) {
+    fill(255, 100, 80);
+    String status = hasAx ? "前回値を表示" : "正常値待ち";
+    text("AX異常 " + axError[id] + "（" + status + "）", x + 20, y + ph - 12);
+  } else if (axErrorCount[id] > 0) {
+    fill(100, 230, 140);
+    text("AX復帰済み（異常 " + axErrorCount[id] + " 回）", x + 20, y + ph - 12);
+  }
 }
 
 
@@ -158,7 +165,7 @@ void drawInformation(float x, float y) {
     
     // 加速度センサーのX軸の値を表示する
     fill(255, 220, 100);
-    text("AX: " + nf(ax[i], 1, 0), x + 180, ty);
+    text("AX: " + (Float.isNaN(ax[i]) ? "--" : nf(ax[i], 1, 0)), x + 180, ty);
     
     // 通信状態に応じて表示内容と色を変更する
     if (!enabled[i]) {

@@ -5,13 +5,13 @@ import processing.serial.*;
 Serial[] ports = new Serial[3];
 
 // 各Zumoが接続されているシリアルポート名
-String[] portNames = {"COM4", "COM6", "COM9"};
+String[] portNames = {"COM4", "COM6", "COM7"};
 
 // trueのロボットのみシリアル通信を行う
 boolean[] enabled = {false, false, true};
 
 // 各COMポートに接続するArduinoのID
-int[] robotIds = {2, 3, 1};
+int[] robotIds = {2, 1, 3};
 
 // 各ロボットの接続状態を管理する
 boolean[] connected = new boolean[3];
@@ -28,9 +28,11 @@ int[] state = {0, 0, 0};
 int[] modeCode = {-1, -1, -1};
 
 // 加速度センサの値
-float[] ax = new float[3];
+float[] ax = {Float.NaN, Float.NaN, Float.NaN};
 float[] ay = new float[3];
 float[] az = new float[3];
+String[] axError = {"", "", ""};
+int[] axErrorCount = new int[3];
 
 // ロボットの姿勢を管理する配列
 float[] pitch = new float[3];

@@ -9,10 +9,15 @@ void readSensorData(int id) {
   while (ports[id].available() > 0) {
     // 改行コードまでのデータを1行として読み取る
     String line = ports[id].readStringUntil('\n');
-    // まだ改行までのデータが届いていない場合は次の処理へ進む
-    if (line == null) continue;
-    // 文字列の前後にある空白や改行を取り除く
-    line = trim(line);
+    if (line == null) break; // 残りのバイトは次のdrawで読む
+    parseSensorLine(id, line);
+  }
+}
+
+void parseSensorLine(int id, String input) {
+  // 正常なACC_Xには改行が付かない場合がある。次のID=で送信単位を区切る。
+  for (String packet : input.split("(?=ID=[0-9]+)")) {
+    String line = trim(packet).replaceFirst("^(ID=[0-9]+)FACING=", "$1,FACING=");
     // 空のデータの場合は処理しない
     if (line.length() == 0) continue;
     // カンマで区切り、各データに分割する
@@ -53,9 +58,10 @@ void readSensorData(int id) {
       }
       continue;
     }
-    // ArduinoのID=1はProcessingの配列番号0に対応する
     // 自分が管理しているロボット以外のデータは無視する
     if (receivedId != robotIds[id]) continue;
+    String axValue = null;
+    String readError = "";
     // 受信した各データを確認する
     for (int i = 0; i < data.length; i++) {
       // 各データを「項目名」と「値」に分割する
@@ -84,12 +90,14 @@ void readSensorData(int id) {
         }
       } else if (key.equals("DIST")) {  // DISTの場合は距離センサの値を更新する
         distanceCm[id] = int(value);
-      } else if (key.equals("ACC_X")) { //X軸の加速度を受信
-        ax[id] = float(value);
-        // 平地でのX軸の値を基準に傾きを計算
-        float flatAx = -50.0;
-        // 加速度の値を角度に変換（暫定計算）
-        pitch[id] = -degrees( asin(constrain((ax[id] - flatAx) / 16384.0, -1.0, 1.0)) );
+      } else if (key.equals("ACC_X")) {
+        axValue = value;
+      } else if (key.equals("AX_ERR")) {
+        readError = value.isEmpty() ? "UNKNOWN" : value;
+      } else if (key.equals("TIMEOUT") && !value.equals("0")) {
+        readError = "TIMEOUT";
+      } else if (key.equals("I2C_STATUS") && !value.equals("0")) {
+        readError = "I2C";
       } else if (key.equals("R")) { //RGB値
         sensorColor[id][0] = constrain((int)float(value), 0, 255);
       } else if (key.equals("G")) {
@@ -133,6 +141,22 @@ void readSensorData(int id) {
       deltaDeg[id] = float(value);
      }
    }
+    // 同じ測定にエラーがあれば、古いACC_Xを傾きに反映しない。
+    if (readError.isEmpty() && axValue != null) {
+      float sample = float(axValue);
+      if (Float.isNaN(sample) || abs(sample) >= 32760) {
+        readError = "RANGE";
+      } else {
+        ax[id] = sample;
+        float flatAx = -50.0;
+        pitch[id] = -degrees(asin(constrain((sample - flatAx) / 16384.0, -1.0, 1.0)));
+        axError[id] = "";
+      }
+    }
+    if (!readError.isEmpty()) {
+      if (axError[id].isEmpty()) axErrorCount[id]++;
+      axError[id] = readError;
+    }
    // 正しいロボットからデータを受信したことを記録する
    received[id] = true;
    // 最後にデータを受信した時刻を記録する

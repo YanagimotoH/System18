@@ -136,6 +136,7 @@ void getRGB(float& r, float& g, float& b); // 校正値を使ってRGB値を取�
 void updateColor(); // 色センサ値を取得して床面色を更新する
 int identify_color(int red, int green, int blue); // 指定RGB値に近いか判定する
 bool isOpponentColor(FloorColor color); // 指定色が相手チーム色か判定する
+void initCompassHardware(); // 基準方位を保持したままLSM303を再検出する
 void setupCompass(); // 方位センサを初期化する
 bool calibrateCompass(); // 方位センサの磁気範囲を校正する
 bool captureHeadingReference(); // 現在の方位を相対方位の基準として記録する
@@ -187,7 +188,7 @@ bool cupLost(); // 前方にカップがない状態が続いたか（運搬・�
 void resetCupLost(); // カップ見失い判定のカウントを初期化する
 
 // 以下山登り関係
-void readAccelXY(int &x, int &y); // 加速度センサーのX,Y軸の値を取得する
+bool readAccelXY(int &x, int &y); // 成功時だけ加速度のX,Yを更新する
 
 extern bool hillAssigned; // 山登り担当に設定されているか
 extern bool hillUsed; // この試合ですでに山登りを試みたか

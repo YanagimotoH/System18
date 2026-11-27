@@ -141,7 +141,12 @@ void updateClimbMission() {
   int accelX;
   int accelY;
   // X軸とY軸を同時に取得する
-  readAccelXY(accelX, accelY);
+  if (!readAccelXY(accelX, accelY)) {
+    stopMotors();
+    detectStartTime = 0;
+    topCheckCount = 0;
+    return;
+  }
 
   // 平地を基準にした前後,左右方向の傾き
   int pitchValue = accelX - CLIMB_FLAT_X;

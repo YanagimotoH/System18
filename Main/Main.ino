@@ -90,6 +90,7 @@ void checkButton() {
       stopMotors();
       motors.setSpeeds(0, 0);
       CalibrationColorSensor();
+      initCompassHardware(); // カラー校正で再設定された共有I2Cバス上のLSM303を再検出
       startupStage = 1;
       Serial1.println("ID=1,STATUS=COLOR_READY");
       buttonWasPressed = button.isPressed();
@@ -235,20 +236,18 @@ void sendStatus() {
   lastSendTime = millis();
   const float headingDeg = readHeadingDeg();
 
-  Serial.print("ID=");
-  Serial.print(ROBOT_ID);
-  Serial.print(",FACING=");
-  Serial.print(facingName(headingDeg));
-  Serial.print(",DELTA_DEG=");
-  if (headingDeg < 0.0f) Serial.println("NA");
-  else Serial.println(headingDeg);
-
   Serial1.print("ID=");
   Serial1.print(ROBOT_ID);
+  Serial1.print(",FACING=");
+  Serial1.print(facingName(headingDeg));
+  Serial1.print(",DELTA_DEG=");
+  if (headingDeg < 0.0f) Serial1.print("NA");
+  else Serial1.print(headingDeg );
+
   Serial1.print(",STATE=");
   Serial1.print(hillMissionActive ? "CLIMB" : stateName());
   Serial1.print(",DIST=");
-  Serial1.println(sensors.distanceCm);
+  Serial1.print(sensors.distanceCm);
   Serial1.print(",R=");
   Serial1.print(sensors.colorRed);
   Serial1.print(",G=");
